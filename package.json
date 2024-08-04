@@ -1,0 +1,25 @@
+{
+  "name": "staticscript",
+  "version": "1.0.0",
+  "description": "TypeScript with C Syntax",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Koefte/StaticScript.git"
+  },
+  "keywords": [
+    "typing",
+    "javascript",
+    "programming",
+    "language"
+  ],
+  "author": "Koefte",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Koefte/StaticScript/issues"
+  },
+  "homepage": "https://github.com/Koefte/StaticScript"
+}
