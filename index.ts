@@ -1,10 +1,9 @@
 import * as fs from 'fs';
-import {Queue} from './queue'
 
-const fileContent = fs.readFileSync("example.jss").toString()
+
+
 
 let content = ""
-let variables:Variable[] = []
 let functions: FunctionDefinition[] = []
 
 
@@ -46,21 +45,24 @@ enum TokenType {
 
 type VariableType = "number" | "boolean" | "void" | "string" | "any"
 
+
+
+
 type Variable = {
   name:string,
   type: VariableType  
 }
 
 type Token = {
-    type:TokenType,
-    val:string
+  type:TokenType,
+  val:string
 }
 
 type FunctionDefinition = {
   name: string;
   returnType: VariableType;
-  body: Token[];
-  inputVars:Variable[]
+  inputVars:Variable[],
+  scope:Scope
 };
 
 
@@ -274,6 +276,7 @@ function analyzeFunctions(tokens: Token[]): FunctionDefinition[] {
       let returnType = tokens[i].val as VariableType;
       let vars:Variable[] = []
       let functionName = tokens[i + 1].val;
+      let c = i + 1
       i += 3; // Skip to after '('
       let inputTokens:Token[] = []
       for(let j = i;j<tokens.length && tokens[j].type != TokenType.CPAREN;j++){
@@ -286,11 +289,25 @@ function analyzeFunctions(tokens: Token[]): FunctionDefinition[] {
       while (tokens[i].type != TokenType.CBRACE && i < tokens.length) {
         i++;
       }
-      let functionBody = tokens.slice(originIndex, i); // Extract function body
-      functions.push({ name: functionName, returnType, body: functionBody ,inputVars:vars});
+      let scope = findScope(rootScope,c,i)
+      functions.push({ name: functionName, returnType,inputVars:vars,scope: scope!});
     }
   }
   return functions;
+}
+
+function findScope(root: Scope, beginIdx: number, endIdx: number): Scope | undefined {
+  console.log(root.beginIdx,root.endIdx,beginIdx,endIdx)
+  if (root.beginIdx === beginIdx && root.endIdx === endIdx) {
+    return root;
+  }
+
+  for (const child of root.children) {
+    const found = findScope(child, beginIdx, endIdx);
+    if (found) return found;
+  }
+
+  return undefined;
 }
 
 function analyzeVariables(tokens: Token[]): Variable[]{
@@ -323,7 +340,7 @@ function  join(inner:Variable[],outer:Variable[]):Variable[]{
 }
 
 function checkFunctionForErrors(func: FunctionDefinition): void {
-  let returnStatements = func.body.filter(token => token.type === TokenType.RETURN);
+  let returnStatements = func.scope.tokens.filter(token => token.type === TokenType.RETURN);
   
   if(returnStatements.length == 0 && func.returnType != "void"){
     throw new Error(`Function ${func.name} of type ${func.returnType} must return something`)
@@ -332,8 +349,8 @@ function checkFunctionForErrors(func: FunctionDefinition): void {
 
   for (let returnStatement of returnStatements) {
     let right : Token[] = []
-    for(let i = func.body.indexOf(returnStatement) + 1;i<func.body.length && func.body[i].type != TokenType.NEWLINE && func.body[i].type != TokenType.SEMICOLON;i++){
-      right.push(func.body[i])
+    for(let i = func.scope.tokens.indexOf(returnStatement) + 1;i<func.scope.tokens.length && func.scope.tokens[i].type != TokenType.NEWLINE && func.scope.tokens[i].type != TokenType.SEMICOLON;i++){
+      right.push(func.scope.tokens[i])
     }
     if(func.returnType == "void"){
       if(right.length != 0 && right[0].type != TokenType.SEMICOLON){
@@ -344,7 +361,7 @@ function checkFunctionForErrors(func: FunctionDefinition): void {
     if(right.length == 0 || (right.length <= 1 && right[0]?.type == TokenType.SEMICOLON)){
       throw new Error(`Function ${func.name} of type ${func.returnType} must return a value`)
     }
-    let returnType = evaluateType(right,join(analyzeVariables(func.body).concat(func.inputVars),variables));
+    let returnType = evaluateType(right,func.scope.getAllVariables());
     if (returnType !== func.returnType) {
       throw new Error(`Function ${func.name} should return ${func.returnType} but returns ${returnType}`);
     }
@@ -373,13 +390,6 @@ const getFunction = (funcName:string):FunctionDefinition | undefined=> {
 }
 
 
-const getVariable = (varName: string): Variable | undefined => {
-  const variable = variables.find(v => v.name === varName);
-  if (!variable) {
-    return undefined
-  }
-  return variable;
-};
 
 function evaluateType(tokens: Token[], variables: Variable[]): VariableType {
   // Helper functions to determine the type of a token
@@ -530,120 +540,193 @@ function displayToken(tok:Token):string{
   return `Type: ${TokenType[tok.type]} -> Val: ${tok.val}`
 }
 
-function checkForErrors(tokens: Token[],variables:Variable[]){
-  for(let i = 1;i<tokens.length;i++){
-    let variable = tokens[i-1]
-    let variableType = variables.find(v => v.name === variable.val)?.type;
+function checkForErrors(scope:Scope){
+  for(let i = 1;i<scope.tokens.length;i++){
+    let variable = scope.tokens[i-1]
+    let variableType = scope.variables.find(v => v.name === variable.val)?.type;
     if(variableType == "any") continue
-    if(tokens[i].type == TokenType.IDENTIFIER){
+    if(scope.tokens[i].type == TokenType.IDENTIFIER){
       
-      if(tokens[i+1]?.type == TokenType.OPAREN && tokens[i-1]?.type != TokenType.RTYPE){ // Check Function Inputs
-        console.log(displayToken(tokens[i]) + "\n")
-        if(tokens[i].val == "log") continue // TODO : support default js libraary
+      if(scope.tokens[i+1]?.type == TokenType.OPAREN && scope.tokens[i-1]?.type != TokenType.RTYPE){ // Check Function Inputs
+        console.log(displayToken(scope.tokens[i]) + "\n")
+        if(scope.tokens[i].val == "log") continue // TODO : support default js libraary
         let funcInputArgs:Token[][] = []
         let balance = 1
         let cursor = i+2
-        for(let j = i+2;j<tokens.length && balance != 0;j++){
-          if(tokens[j].type == TokenType.OPAREN) balance++
-          if(tokens[j].type == TokenType.CPAREN) balance--
-          if(tokens[j].type == TokenType.COMMA) {
-            funcInputArgs.push(tokens.slice(cursor,j).filter(el => el.type != TokenType.COMMA))
+        for(let j = i+2;j<scope.tokens.length && balance != 0;j++){
+          if(scope.tokens[j].type == TokenType.OPAREN) balance++
+          if(scope.tokens[j].type == TokenType.CPAREN) balance--
+          if(scope.tokens[j].type == TokenType.COMMA) {
+            funcInputArgs.push(scope.tokens.slice(cursor,j).filter(el => el.type != TokenType.COMMA))
             cursor = j
           }
-          if(balance == 0) funcInputArgs.push(tokens.slice(cursor,j).filter(el => el.type != TokenType.COMMA)) // IF ENCOUNTER END THEN ALSO SLICE THE REST
+          if(balance == 0) funcInputArgs.push(scope.tokens.slice(cursor,j).filter(el => el.type != TokenType.COMMA)) // IF ENCOUNTER END THEN ALSO SLICE THE REST
            
         }
-        let func = getFunction(tokens[i].val)
-        if(func == undefined) throw new Error(`Trying to call unknown function: ${tokens[i].val}`)
+        let func = getFunction(scope.tokens[i].val)
+        if(func == undefined) throw new Error(`Trying to call unknown function: ${scope.tokens[i].val}`)
         let funcVars = func!.inputVars.map(variable => variable.type)
 
         
         if(isEmpty2DArray(funcInputArgs) && funcVars.length != 0)  throw new Error(`Function ${func.name} must be called with args ${funcVars.length == 0 ? "no arguments" : funcVars} but was called with no arguments`)
         else {
-          let funcInputTypes = funcInputArgs.map(el => evaluateType(el,variables))
+          let funcInputTypes = funcInputArgs.map(el => evaluateType(el,scope.variables))
           if(!arraysEqual(funcInputTypes,funcVars)){
-            throw new Error(`Function ${func!.name} must be called with args  ${funcVars.length == 0 ? "no arguments" : funcVars} but was called with ${funcInputTypes.length == 0 ? "no arguments" : funcInputTypes}`)
+            throw new Error(`Function ${func.name} must be called with args  ${funcVars.length == 0 ? "no arguments" : funcVars} but was called with ${funcInputTypes.length == 0 ? "no arguments" : funcInputTypes}`)
           }
         }
        
        
       }
     }
-    if(tokens[i].type == TokenType.EQUAL){
+    if(scope.tokens[i].type == TokenType.EQUAL){
       let right:Token[] = []
-      for(let j = i+1;j<tokens.length && tokens[j].type != TokenType.NEWLINE && tokens[j].type != TokenType.SEMICOLON;j++){
-        right.push(tokens[j])
+      for(let j = i+1;j<scope.tokens.length && scope.tokens[j].type != TokenType.NEWLINE && scope.tokens[j].type != TokenType.SEMICOLON;j++){
+        right.push(scope.tokens[j])
       }
-      if(evaluateType(right,variables) != variableType){
-        throw new Error(`Cannot assign variable ${variable.val} to value ${right.map((el) => el.val).toString()} types dont match ${variableType} => ${evaluateType(right,variables)}`)
+      if(evaluateType(right,scope.variables) != variableType){
+        throw new Error(`Cannot assign variable ${variable.val} to value ${right.map((el) => el.val).toString()} types dont match ${variableType} => ${evaluateType(right,scope.variables)}`)
       }
     }
-    else if(tokens[i].type == TokenType.PLUSPLUS){
+    else if(scope.tokens[i].type == TokenType.PLUSPLUS){
       if(variableType != "number"){
         throw new Error(`Can only increment numbers not variable ${variable.val} of type ${variableType}`)
       }
     }
-    else if(tokens[i].type == TokenType.MINUSMINUS){
+    else if(scope.tokens[i].type == TokenType.MINUSMINUS){
       if(variableType != "number"){
         throw new Error(`Can only decrement numbers not variable ${variable.val} of type ${variableType}`)
       }
     }
-    else if(tokens[i].type == TokenType.PLUSEQUAL){
+    else if(scope.tokens[i].type == TokenType.PLUSEQUAL){
       if(variableType != "number" && variableType != "string"){
         throw new Error(`Can only  plusequal numbers or strings not variable ${variable.val} of type ${variableType}`)
       }
       let right:Token[] = []
-      for(let j = i+1;j<tokens.length && tokens[j].type != TokenType.NEWLINE && tokens[j].type != TokenType.SEMICOLON;j++){
-        right.push(tokens[j])
+      for(let j = i+1;j<scope.tokens.length && scope.tokens[j].type != TokenType.NEWLINE && scope.tokens[j].type != TokenType.SEMICOLON;j++){
+        right.push(scope.tokens[j])
       }
-      if(evaluateType(right,variables) != variableType){
-        throw new Error(`Cannot increment variable ${variable.val} with ${evaluateType(right,variables)}`)
+      if(evaluateType(right,scope.variables) != variableType){
+        throw new Error(`Cannot increment variable ${variable.val} with ${evaluateType(right,scope.variables)}`)
       }
     }
-    else if(tokens[i].type == TokenType.MINUSEQUAL){
+    else if(scope.tokens[i].type == TokenType.MINUSEQUAL){
       if(variableType != "number"){
         throw new Error(`Can only minusequal numbers not variable ${variable.val} of type ${variableType}`)
       }
     }
-    else if(tokens[i].type == TokenType.MULTIPLYEQUAL){
+    else if(scope.tokens[i].type == TokenType.MULTIPLYEQUAL){
       if(variableType != "number"){
         throw new Error(`Can only multiplyequal numbers not variable ${variable.val} of type ${variableType}`)
       }
     }
-    else if(tokens[i].type == TokenType.DIVIDEEQUAL){
+    else if(scope.tokens[i].type == TokenType.DIVIDEEQUAL){
       if(variableType != "number"){
         throw new Error(`Can only divideequal numbers not variable ${variable.val} of type ${variableType}`)
       }
     }
   }
+  for(let childScope of scope.children){
+    checkForErrors(childScope)
+  }
 
 }
 
+function findMatchingCBrace(tokens:Token[],beginIdx:number,skipFirstO:boolean) : number{
+  for(let i =  beginIdx;i<tokens.length;i++){
+    let balance = 1
+    if(tokens[i].type == TokenType.CBRACE) balance--
+    if(tokens[i].type == TokenType.OBRACE && !skipFirstO) balance++
+    if(balance == 0) return i
+  }
+  console.log("got here")
+  return -1
+}
+
+class Scope{
+  tokens:Token[] = []
+  variables: Variable[] = []
+  children:Scope[] = []
+  parent:Scope | undefined = undefined 
+  beginIdx:number
+  endIdx:number
+
+
+  constructor(inputTokens:Token[],beginIdx:number,endIdx:number,ignoreFirstOBrace:boolean = false){
+    this.beginIdx = beginIdx
+    this.endIdx = endIdx
+    for(let i = beginIdx;i<endIdx;i++){
+      let token = inputTokens[i]
+      if(token.type == TokenType.RTYPE){
+        let matchingCBraceIdx = findMatchingCBrace(inputTokens,i,true)
+        let childScope = new Scope(inputTokens,i+1,matchingCBraceIdx,true)
+        this.children.push(childScope)
+        childScope.parent = this
+        i = matchingCBraceIdx == - 1 ? i : matchingCBraceIdx
+      }
+      else if(token.type == TokenType.OBRACE && inputTokens[i-1]?.type != TokenType.EQUAL && !ignoreFirstOBrace){
+        let matchingCBraceIdx = findMatchingCBrace(inputTokens,i,false)
+        let childScope = new Scope(inputTokens,i+1,matchingCBraceIdx)
+        this.children.push(childScope)
+        childScope.parent = this
+        i = matchingCBraceIdx == - 1 ? i : matchingCBraceIdx
+      }
+      else this.tokens.push(token)
+    }
+    this.variables = analyzeVariables(this.tokens)
+  }
+
+  
+  
+
+  
+
+  getAllVariables():Variable[]{
+      if(this.parent == undefined) return this.variables
+      return join(this.variables,this.parent.getAllVariables())
+  }
+}
+
+
+
+
+
+
+const fileContent = fs.readFileSync("example.jss").toString()
 
 const rawStatements = lex(fileContent).filter((el) => el != "")
 const statements = rawStatements.filter((el) => el != " " && el != "\r")
 
-const tokens = tokenize(statements)
+const allTokens = tokenize(statements)
+let rootScope = new Scope(allTokens,0,allTokens.length)
+console.log(rootScope.tokens)
+console.log(rootScope.children[0].tokens)
+
+
+
+
+
+
+
 const rawTokens = tokenize(rawStatements)
 
 
 
 
-// Token type to string for better readability
-const tokenTypeToString = (type: TokenType) => TokenType[type];
 
 
 
-
-
-variables = analyzeVariables(tokens)
-functions = analyzeFunctions(tokens)
+functions = analyzeFunctions(allTokens)
 
 checkFunctionsForErrors(functions)
 
 
 
-checkForErrors(tokens,variables)
+checkForErrors(rootScope)
 
 let jsCode = transpile(rawTokens)
 fs.writeFileSync("example.js",jsCode)
+
+
+
+
