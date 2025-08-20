@@ -341,7 +341,7 @@ function analyzeVariables(tokens: Token[]): Variable[]{
       }
       else{
         if(tokens[i+1].type == TokenType.IDENTIFIER){
-          variables.push({name:tokens[i+2].val,type:tokens[i].val as VariableType})
+          variables.push({name:tokens[i+1].val,type:tokens[i].val as VariableType})
         }
       }
     }
@@ -408,23 +408,29 @@ const getFunction = (funcName:string):FunctionDefinition | undefined=> {
   return func
 }
 
-function splitBy<T>(arr: T[], predicate: (item: T) => boolean): T[][] {
-  const result: T[][] = [];
-  let currentChunk: T[] = [];
+function splitByCommaRespectingNesting(tokens: Token[]): Token[][] {
+  const result: Token[][] = [];
+  let current: Token[] = [];
+  let depth = 0;
 
-  arr.forEach((item, index) => {
-    if (predicate(item)) {
-      if (currentChunk.length > 0) {
-        result.push(currentChunk);
-        currentChunk = [];
-      }
+  for (const tok of tokens) {
+    if (tok.type === TokenType.OBRACKET) {
+      depth++;
+      current.push(tok);
+    } else if (tok.type === TokenType.CBRACKET) {
+      depth--;
+      current.push(tok);
+    } else if (tok.type === TokenType.COMMA && depth === 0) {
+      // Only split at top-level commas
+      result.push(current);
+      current = [];
     } else {
-      currentChunk.push(item);
+      current.push(tok);
     }
-  });
+  }
 
-  if (currentChunk.length > 0) {
-    result.push(currentChunk);
+  if (current.length > 0) {
+    result.push(current);
   }
 
   return result;
@@ -432,11 +438,10 @@ function splitBy<T>(arr: T[], predicate: (item: T) => boolean): T[][] {
 
 
 
-
 function evaluateType(tokens: Token[], variables: Variable[]): VariableType {
   // Helper functions to determine the type of a token
   const isNumberToken = (token: Token) => {
-    return isNumber(token.val);
+    return isNumber(token.val) && token.type != TokenType.STRING;
   };
 
   const isStringToken = (token: Token) => {
@@ -494,7 +499,7 @@ function evaluateType(tokens: Token[], variables: Variable[]): VariableType {
           let arrTokens:Token[] = []
           i++
           let balance  = 1
-          while(balance != 0) {
+          while(balance != 0 && i < exprTokens.length) {
             
             if(exprTokens[i].type == TokenType.OBRACKET) balance++
             if(exprTokens[i].type == TokenType.CBRACKET) balance--  
@@ -502,15 +507,17 @@ function evaluateType(tokens: Token[], variables: Variable[]): VariableType {
             i++
           }
           if(arrTokens.length == 0) return "any"
-          let values :Token[][] = splitBy(arrTokens,(item) => item.type == TokenType.COMMA)
+          let values :Token[][] = splitByCommaRespectingNesting(arrTokens)
+          console.log(values)
           arrType = evaluateType(values[0],variables)
           for(let value of values){
-            if(evaluateType(value,variables) != arrType) throw new Error(`Value ${value.map(el => el.val).toString()} cannot be put inside array of type ${arrType}`)
+            if(evaluateType(value,variables) != arrType) arrType = "any"
           }
           if(currentType != null) throw new Error("I dont see this happening")
           else currentType = arrType + "[]" as VariableType
 
-        }else if (isBooleanToken(token)) {
+        }else if(token.type == TokenType.CBRACKET) continue
+        else if (isBooleanToken(token)) {
         if (currentType === null) {
           currentType = "boolean";
         } else if (currentType !== "boolean") {
@@ -524,9 +531,9 @@ function evaluateType(tokens: Token[], variables: Variable[]): VariableType {
               while(exprTokens[i].type != TokenType.CPAREN) i++
             }
             else if(isIdentifier(exprTokens[i])){
-              exprType = getVariableType(exprTokens[i].val)
+              if(!isNumberToken(exprTokens[i])) exprType = getVariableType(exprTokens[i].val)
             }
-            else if(exprTokens[i].type == TokenType.OBRACKET){
+            else if(exprTokens[i]?.type == TokenType.OBRACKET){
               if(!exprType) throw new Error("Cant index nothing")
               if(!exprType.endsWith("[]")) throw new Error(`Cant index non array type ${token.val}`)
               else{
@@ -623,17 +630,31 @@ function checkForErrors(scope:Scope){
       if(scope.tokens[i+1]?.type == TokenType.OPAREN && scope.tokens[i-1]?.type != TokenType.RTYPE){ // Check Function Inputs
         if(scope.tokens[i].val == "log") continue // TODO : support default js libraary
         let funcInputArgs:Token[][] = []
-        let balance = 1
         let cursor = i+2
-        for(let j = i+2;j<scope.tokens.length && balance != 0;j++){
-          if(scope.tokens[j].type == TokenType.OPAREN) balance++
-          if(scope.tokens[j].type == TokenType.CPAREN) balance--
-          if(scope.tokens[j].type == TokenType.COMMA) {
-            funcInputArgs.push(scope.tokens.slice(cursor,j).filter(el => el.type != TokenType.COMMA))
-            cursor = j
-          }
-          if(balance == 0) funcInputArgs.push(scope.tokens.slice(cursor,j).filter(el => el.type != TokenType.COMMA)) // IF ENCOUNTER END THEN ALSO SLICE THE REST
-           
+        let parenBalance = 1; // starting from the opening '('
+        let bracketBalance = 0; // track [ ]
+
+        for (let j = i + 2; j < scope.tokens.length && parenBalance != 0; j++) {
+            const tok = scope.tokens[j];
+
+            if (tok.type === TokenType.OPAREN) parenBalance++;
+            else if (tok.type === TokenType.CPAREN) parenBalance--;
+            else if (tok.type === TokenType.OBRACKET) bracketBalance++;
+            else if (tok.type === TokenType.CBRACKET) bracketBalance--;
+
+            // only split on commas at top-level of this function argument
+            if (tok.type === TokenType.COMMA && bracketBalance === 0 && parenBalance > 0) {
+                funcInputArgs.push(
+                    scope.tokens.slice(cursor, j).filter(el => el.type != TokenType.COMMA)
+                );
+                cursor = j + 1; // skip the comma
+            }
+
+            if (parenBalance === 0) {
+                funcInputArgs.push(
+                    scope.tokens.slice(cursor, j).filter(el => el.type != TokenType.COMMA)
+                );
+            }
         }
         let func = getFunction(scope.tokens[i].val)
         if(func == undefined) throw new Error(`Trying to call unknown function: ${scope.tokens[i].val}`)
@@ -643,6 +664,7 @@ function checkForErrors(scope:Scope){
         if(isEmpty2DArray(funcInputArgs) && funcVars.length != 0)  throw new Error(`Function ${func.name} must be called with args ${funcVars.length == 0 ? "no arguments" : funcVars} but was called with no arguments`)
         else {
           let funcInputTypes = funcInputArgs.map(el => evaluateType(el,scope.getAllVariables()))
+          console.log(funcInputArgs)
           if(!arraysEqual(funcInputTypes,funcVars)){
             throw new Error(`Function ${func.name} must be called with args  ${funcVars.length == 0 ? "no arguments" : funcVars} but was called with ${funcInputTypes.length == 0 ? "no arguments" : funcInputTypes}`)
           }
@@ -667,6 +689,7 @@ function checkForErrors(scope:Scope){
       for(let j = i+1;j<scope.tokens.length && scope.tokens[j].type != TokenType.NEWLINE && scope.tokens[j].type != TokenType.SEMICOLON;j++){
         right.push(scope.tokens[j])
       }
+      console.log(evaluateType(left,scope.getAllVariables()),evaluateType(right,scope.getAllVariables()))
       if(evaluateType(right,scope.getAllVariables()) != evaluateType(left,scope.getAllVariables()) && !evaluateType(right,scope.getAllVariables()).startsWith("any")){
         throw new Error(`Cannot assign ${left.map(el => el.val).join("")} to value ${right.map((el) => el.val).join("")} types dont match ${evaluateType(left,scope.getAllVariables())} => ${evaluateType(right,scope.getAllVariables())}`)
       }
@@ -814,7 +837,7 @@ const statements = rawStatements.filter((el) => el != " " && el != "\r")
 
 const allTokens = tokenize(statements)
 let rootScope = new Scope(allTokens,0,allTokens.length)
-console.log(rootScope.tokens)
+
 
 
 
