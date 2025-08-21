@@ -41,7 +41,9 @@ enum TokenType {
   RETURN,
   RTYPE,
   FTYPE,
-  COMMA
+  COMMA,
+  DOT,
+  STRUCT
 }
   
 
@@ -61,6 +63,11 @@ type Variable = {
 type Token = {
   type:TokenType,
   val:string
+}
+
+type Struct = {
+  name:string
+  vars:Variable[]
 }
 
 type FunctionDefinition = {
@@ -95,7 +102,38 @@ function chopWhile(cond:(str:string) => boolean):string{
 }
 
 
+function analyzeStructs(tokens:Token[]): Struct[]{
+    let structs :Struct[]= []
 
+    for(let i = 0;i<tokens.length;i++){
+      if(tokens[i].type == TokenType.STRUCT){
+        let struct : Struct = {name:"",vars:[]}
+        struct.name = tokens[i+1].val
+        let structTokens:Token[] = []
+        i+=3
+        while(tokens[i].type != TokenType.CBRACE){
+          structTokens.push(tokens[i])
+          i++
+        }
+        
+        struct.vars = analyzeVariables(structTokens)
+        variableTypes.push(struct.name)
+        
+       
+      }
+    }
+
+    return structs
+}
+
+function getStruct(name:string,vars:Variable[]):Struct{
+  let variable = vars.find((variable) => variable.name == name)
+  if(!variable) throw new Error(`Undefined variable: ${name}`)
+  for(let struct of structs){
+    if(struct.name == variable.type) return struct
+  }
+  throw new Error("Could not find struct " + name)
+}
 
 
 
@@ -252,8 +290,14 @@ function tokenize(content:string[]):Token[]{
     else if(content[i] == "return"){
       tokens.push({type:TokenType.RETURN,val:content[i]})
     }
+    else if(content[i] == "struct"){
+      tokens.push({type:TokenType.STRUCT,val:content[i]})
+    }
     else if(content[i] == ";"){
       tokens.push({type:TokenType.SEMICOLON,val:content[i]})
+    }
+    else if(content[i] == "."){
+      tokens.push({type:TokenType.DOT,val:content[i]})
     }
     else if(content[i] == "\n"){
       tokens.push({type:TokenType.NEWLINE,val:content[i]})
@@ -508,7 +552,6 @@ function evaluateType(tokens: Token[], variables: Variable[]): VariableType {
           }
           if(arrTokens.length == 0) return "any"
           let values :Token[][] = splitByCommaRespectingNesting(arrTokens)
-          console.log(values)
           arrType = evaluateType(values[0],variables)
           for(let value of values){
             if(evaluateType(value,variables) != arrType) arrType = "any"
@@ -532,6 +575,17 @@ function evaluateType(tokens: Token[], variables: Variable[]): VariableType {
             }
             else if(isIdentifier(exprTokens[i])){
               if(!isNumberToken(exprTokens[i])) exprType = getVariableType(exprTokens[i].val)
+            }
+            else if(exprTokens[i].type == TokenType.DOT){
+              let struct = getStruct(exprTokens[i-1].val,variables)
+              for(let variable of struct.vars){
+                let found = false
+                if(variable.name == exprTokens[i+1].val) {
+                  exprType = variable.type
+                  found = true
+                }
+                if(!found) throw new Error(`Property ${exprTokens[i+1].val} does not exist on struct of type ${struct.name}`)
+              }
             }
             else if(exprTokens[i]?.type == TokenType.OBRACKET){
               if(!exprType) throw new Error("Cant index nothing")
@@ -830,12 +884,14 @@ class Scope{
 
 
 
+
 const fileContent = fs.readFileSync("example.jss").toString()
 
 const rawStatements = lex(fileContent).filter((el) => el != "")
 const statements = rawStatements.filter((el) => el != " " && el != "\r")
 
 const allTokens = tokenize(statements)
+let structs = analyzeStructs(allTokens)
 let rootScope = new Scope(allTokens,0,allTokens.length)
 
 
@@ -863,7 +919,3 @@ checkForErrors(rootScope)
 
 let jsCode = transpile(rawTokens)
 fs.writeFileSync("example.js",jsCode)
-
-
-
-
