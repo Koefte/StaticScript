@@ -1,5 +1,5 @@
-import * as fs from 'fs';
 
+import { TokenType , Token, Tokenizer,ExpectError} from "./tokenizer.js";
 
 
 
@@ -11,47 +11,12 @@ let content = ""
 
 
 
-enum TokenType {
-  IDENTIFIER,
-  EQUAL,
-  TYPE,
-  PLUSPLUS,
-  MINUSMINUS,
-  EXPO,
-  NEWLINE,
-  SEMICOLON,
-  STRING,
-  OR,
-  AND,
-  NOT,
-  PLUS,
-  MINUS,
-  MULTIPLY,
-  DIVIDE,
-  OPAREN,
-  CPAREN,
-  OBRACE,
-  CBRACE,
-  OBRACKET,
-  CBRACKET,
-  PLUSEQUAL,
-  MINUSEQUAL,
-  MULTIPLYEQUAL,
-  DIVIDEEQUAL,
-  RETURN,
-  RTYPE,
-  FTYPE,
-  STYPE,
-  COMMA,
-  DOT,
-  STRUCT,
-  COLON
-}
+
   
 
 
 
-let variableTypes = ["number" , "boolean" , "void" , "string" , "any"]
+export const variableTypes = ["number" , "boolean" , "void" , "string" , "any"]
 
 
 
@@ -62,10 +27,7 @@ type Variable = {
   type: VariableType  
 }
 
-type Token = {
-  type:TokenType,
-  val:string
-}
+
 
 type Struct = {
   name:string
@@ -174,156 +136,7 @@ function lex(code:string):string[]{
   return tokens
 }
 
-function tokenize(content:string[]):Token[]{
-  let tokens:Token[] = []
-  for(let i = 0;i<content.length;i++){
-    if(variableTypes.includes(content[i])){  
-      let type = content[i]  
-      i++ 
-      while(content[i] == "[" || content[i] == "]")   {
-        type += content[i]
-        i++
-      }
-      i--
-      for(let j = i;j<content.length;j++){
-        if(content[j] == "="){
-          tokens.push({type:TokenType.TYPE,val:type})
-          break
-        }
-        else if(content[j] == "("){
-          tokens.push({type:TokenType.RTYPE,val:type})
-          break
-        }
-        else if(content[j] == "{"){
-          tokens.push({type:TokenType.STYPE,val:type})
-        }
-        else if(content[j] == ")"){
-          tokens.push({type:TokenType.FTYPE,val:type})
-          break          
-        }
-      }
-    }
-    else if(content[i] == `"`){
-      let text = ""
-      i++
-      while(content[i] != `"`){
-        text += content[i]
-        i++
-      }
-      tokens.push({type:TokenType.STRING,val:text})
-    }
-    else if(content[i] == "="){
-      if(content[i+1] != "=" && content[i] != ">")
-        tokens.push({type:TokenType.EQUAL,val:content[i]})
-    }
-    else if(content[i] == ","){
-      tokens.push({type:TokenType.COMMA,val:content[i]})
-    }
-    else if(content[i] == "+"){
-      if(content[i+1] == "+"){
-        tokens.push({type:TokenType.PLUSPLUS,val:"++"})
-      }
-      else if(content[i+1] == "="){
-        tokens.push({type:TokenType.PLUSEQUAL,val:"+="})
-        i++
-      }
-      else{
-        tokens.push({type:TokenType.PLUS,val:content[i]})
-      }
-    }
-    else if(content[i] == "-"){
-      if(content[i+1] == "-"){
-        tokens.push({type:TokenType.MINUSMINUS,val:"--"})
-      }
-      else if(content[i+1] == "="){
-        tokens.push({type:TokenType.MINUSEQUAL,val:"-="})
-        i++
-      }
-      else{
-        tokens.push({type:TokenType.MINUS,val:content[i]})
-      }
-    }
-    else if(content[i] == "*"){
-      if(content[i+1] == "*"){
-        tokens.push({type:TokenType.EXPO,val:"**"})
-      }
-      else if(content[i+1] == "="){
-        tokens.push({type:TokenType.MULTIPLYEQUAL,val:"*="})
-        i++
-      }
-      else{
-        tokens.push({type:TokenType.MULTIPLY,val:content[i]})
-      }
-    }
-    else if(content[i] == "/"){
-      if(content[i+1] == "/"){
-        while(content[i] != "\n"  && i < content.length) i++
-      }
-      else if(content[i+1] == "="){
-        tokens.push({type:TokenType.DIVIDEEQUAL,val:"/="})
-        i++
-      }
-      else{
-        tokens.push({type:TokenType.DIVIDE,val:content[i]})
-      }
-    }
-    else if(content[i] == "("){
-      tokens.push({type:TokenType.OPAREN,val:content[i]})
-    }
-    else if(content[i] == ")"){
-      tokens.push({type:TokenType.CPAREN,val:content[i]})
-    }
-    else if(content[i] == "{"){
-      tokens.push({type:TokenType.OBRACE,val:content[i]})
-    }
-    else if(content[i] == "}"){
-      tokens.push({type:TokenType.CBRACE,val:content[i]})
-    }
-    else if(content[i] == "["){
-      tokens.push({type:TokenType.OBRACKET,val:content[i]})
-    }
-    else if(content[i] == "]"){
-      tokens.push({type:TokenType.CBRACKET,val:content[i]})
-    }
-    else if(content[i] == "!"){
-      if(content[i+1] != "="){
-        tokens.push({type:TokenType.NOT,val:content[i]})
-      }
-    }
-    else if(content[i] == "&"){
-      if(content[i+1] != "&"){
-        tokens.push({type:TokenType.AND,val:"&"})
-      }
-    }
-    else if(content[i] == "|"){
-      if(content[i+1] == "|"){
-        tokens.push({type:TokenType.OR,val:"||"})
-      }
-    }
-    else if(content[i] == "return"){
-      tokens.push({type:TokenType.RETURN,val:content[i]})
-    }
-    else if(content[i] == "struct"){
-      tokens.push({type:TokenType.STRUCT,val:content[i]})
-    }
-    else if(content[i] == ";"){
-      tokens.push({type:TokenType.SEMICOLON,val:content[i]})
-    }
-    else if(content[i] == "."){
-      tokens.push({type:TokenType.DOT,val:content[i]})
-    }
-    else if(content[i] == ":"){
-      tokens.push({type:TokenType.COLON,val:content[i]})
-    }
-    else if(content[i] == "\n"){
-      tokens.push({type:TokenType.NEWLINE,val:content[i]})
-    }
-    else{
-      tokens.push({type:TokenType.IDENTIFIER,val:content[i]})
-    }
-  }
-  return tokens
-}
+
 
 function transpile(tokens:Token[]): string{
     let result = ""
@@ -354,15 +167,14 @@ function transpile(tokens:Token[]): string{
 function analyzeFunctions(tokens: Token[],rootScope:Scope): FunctionDefinition[] {
   let functions: FunctionDefinition[] = [];
   for (let i = 0; i < tokens.length; i++) {
-    if (tokens[i].type === TokenType.RTYPE && tokens[i + 1].type === TokenType.IDENTIFIER && tokens[i + 2].type === TokenType.OPAREN) {
-      let returnType = tokens[i].val as VariableType;
+    let expected = Tokenizer.expectMany(tokens.slice(i, i + 3)).toBe([TokenType.RTYPE, TokenType.IDENTIFIER, TokenType.OPAREN]);
+    if(!(expected instanceof ExpectError)){
+      let [returnTypeToken,functionNameToken,_] = expected.getValues()
+      let returnType = returnTypeToken.val as VariableType;
       let vars:Variable[] = []
-      let functionName = tokens[i + 1].val;
+      let functionName = functionNameToken.val;
       i += 3; // Skip to after '('
-      let inputTokens:Token[] = []
-      for(let j = i;j<tokens.length && tokens[j].type != TokenType.CPAREN;j++){
-        inputTokens.push(tokens[j])
-      }
+      let inputTokens:Token[] = Tokenizer.pushWhile(tokens,(token:Token) => token.type != TokenType.CPAREN,i)
       vars = analyzeVariables(inputTokens)
       let originIndex = i
       while(tokens[originIndex].type != TokenType.OBRACE && originIndex < tokens.length) originIndex++
@@ -373,6 +185,7 @@ function analyzeFunctions(tokens: Token[],rootScope:Scope): FunctionDefinition[]
       let scope = findScope(rootScope,originIndex,i)
       functions.push({ name: functionName, returnType,inputVars:vars,scope: scope!});
     }
+     
   }
   return functions;
 }
@@ -1019,16 +832,18 @@ export function compile(code :string){
   const rawStatements = lex(code).filter((el) => el != "")
   const statements = rawStatements.filter((el) => el != " " && el != "\r")
 
-  let allTokens = tokenize(statements)
+  const tokenizer = new Tokenizer(statements)
+
+  let allTokens = tokenizer.tokenize(variableTypes);
   let structs = analyzeStructs(allTokens.filter(el => el.type != TokenType.NEWLINE))
-  allTokens = tokenize(statements)
+  allTokens = tokenizer.tokenize(variableTypes); // Retokenize to include structs
   let rootScope = new Scope(allTokens,0,allTokens.length)
   let functions = analyzeFunctions(allTokens,rootScope)
   checkFunctionsForErrors(functions,allTokens,structs)
   checkForErrors(rootScope,structs,functions)
 }
 
-compile(fs.readFileSync("tests/success/nested_structs.jss").toString())
+
 
 
 
