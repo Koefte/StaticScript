@@ -4,7 +4,12 @@
   "description": "TypeScript with C Syntax",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": ["**/__tests__/**/*.ts", "**/*.test.ts", "**/*.spec.ts"]
   },
   "repository": {
     "type": "git",
@@ -21,5 +26,11 @@
   "bugs": {
     "url": "https://github.com/Koefte/StaticScript/issues"
   },
-  "homepage": "https://github.com/Koefte/StaticScript"
+  "homepage": "https://github.com/Koefte/StaticScript",
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.9.3"
+  }
 }
