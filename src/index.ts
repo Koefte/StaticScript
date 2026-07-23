@@ -1,5 +1,5 @@
 
-import { TokenType , Token, Tokenizer,ExpectError} from "./tokenizer.js";
+import { TokenType , Token, RawToken, Tokenizer,ExpectError} from "./tokenizer.js";
 
 
 
@@ -113,46 +113,84 @@ function getStruct(name:string,vars:Variable[],structs:Struct[],functions:Functi
 
 
 
-function lex(code:string):string[]{
+function formatError(msg: string, token?: Token): string {
+  if (token && token.line !== undefined && token.column !== undefined) {
+    return `[Line ${token.line}:${token.column}] ${msg}`;
+  }
+  return msg;
+}
+
+function lex(code: string): RawToken[] {
   content = code;
-  let tokens: string[] = [];
-  while(content.length > 0){
-      let ch = content.charAt(0);
-      if(isLetter(ch)){
-          tokens.push(chopWhile((str:string) => isAlphaNumeric(str)))
-      }
+  let tokens: RawToken[] = [];
+  let curLine = 1;
+  let curCol = 1;
 
-      else if(isNumber(ch)){
-          tokens.push(chopWhile((str:string) => isNumber(str) || str === "."))  
-      }  
-      
-      else if(ch == "-"){
-        if(content.length > 1 && isNumber(content.charAt(1))){
-          // Include the minus sign in the token
-          tokens.push(chop(1) + chopWhile((str:string) => isNumber(str) || str === "."));
-        } else {
-          tokens.push(chop(1));
-        }
-      }
-      
+  while (content.length > 0) {
+    let ch = content.charAt(0);
+    let startLine = curLine;
+    let startCol = curCol;
 
-      else if(ch == '"'){
+    if (ch === " " || ch === "\t" || ch === "\r") {
+      chop(1);
+      curCol += (ch === "\t" ? 4 : 1);
+    } else if (ch === "\n") {
+      chop(1);
+      curLine++;
+      curCol = 1;
+      tokens.push({ val: "\n", line: startLine, column: startCol });
+    } else if (isLetter(ch)) {
+      let word = chopWhile((str: string) => isAlphaNumeric(str));
+      curCol += word.length;
+      tokens.push({ val: word, line: startLine, column: startCol });
+    } else if (isNumber(ch)) {
+      let numStr = chopWhile((str: string) => isNumber(str) || str === ".");
+      curCol += numStr.length;
+      tokens.push({ val: numStr, line: startLine, column: startCol });
+    } else if (ch == "-") {
+      if (content.length > 1 && isNumber(content.charAt(1))) {
+        let negNum = chop(1) + chopWhile((str: string) => isNumber(str) || str === ".");
+        curCol += negNum.length;
+        tokens.push({ val: negNum, line: startLine, column: startCol });
+      } else {
         chop(1);
-        let strContent = "";
-        while(content.length > 0 && content.charAt(0) != '"'){
-          if(content.charAt(0) == '\\' && content.length > 1){
-            strContent += chop(2);
+        curCol++;
+        tokens.push({ val: "-", line: startLine, column: startCol });
+      }
+    } else if (ch == '"') {
+      chop(1);
+      curCol++;
+      let strContent = "";
+      while (content.length > 0 && content.charAt(0) != '"') {
+        if (content.charAt(0) == '\\' && content.length > 1) {
+          let esc = chop(2);
+          strContent += esc;
+          curCol += 2;
+        } else {
+          let c = chop(1);
+          strContent += c;
+          if (c === "\n") {
+            curLine++;
+            curCol = 1;
           } else {
-            strContent += chop(1);
+            curCol++;
           }
         }
-        chop(1);
-        tokens.push('"' + strContent + '"');
       }
-
-      else if(ch != "") tokens.push(chop(1))
-  } 
-  return tokens
+      if (content.length > 0) {
+        chop(1);
+        curCol++;
+      }
+      tokens.push({ val: '"' + strContent + '"', line: startLine, column: startCol });
+    } else {
+      let singleChar = chop(1);
+      curCol++;
+      if (singleChar !== "") {
+        tokens.push({ val: singleChar, line: startLine, column: startCol });
+      }
+    }
+  }
+  return tokens;
 }
 
 
@@ -266,7 +304,7 @@ function checkFunctionForErrors(func: FunctionDefinition,allTokens:Token[],struc
   let returnStatements = getScopeReturnStatements(func.scope);
   
   if(returnStatements.length == 0 && func.returnType != "void"){
-    throw new Error(`Function ${func.name} of type ${func.returnType} must return something`)
+    throw new Error(formatError(`Function ${func.name} of type ${func.returnType} must return something`, func.scope.tokens[0]))
   }
 
 
@@ -301,17 +339,17 @@ function checkFunctionForErrors(func: FunctionDefinition,allTokens:Token[],struc
     }
     if(func.returnType == "void"){
       if(right.length != 0 && right[0].type != TokenType.SEMICOLON){
-        throw new Error(`Void function ${func.name} cant return a value`)
+        throw new Error(formatError(`Void function ${func.name} cant return a value`, right[0]))
       }
       continue
     }
     if(right.length == 0 || (right.length <= 1 && right[0]?.type == TokenType.SEMICOLON)){
-      throw new Error(`Function ${func.name} of type ${func.returnType} must return a value`)
+      throw new Error(formatError(`Function ${func.name} of type ${func.returnType} must return a value`, returnStatement))
     }
     let scopeVars = join(func.scope.getAllVariables(), func.inputVars);
     let returnType = evaluateType(right.filter(el => el.type != TokenType.NEWLINE), scopeVars, structs, functions);
     if (returnType !== func.returnType) {
-      throw new Error(`Function ${func.name} should return ${func.returnType} but returns ${returnType}`);
+      throw new Error(formatError(`Function ${func.name} should return ${func.returnType} but returns ${returnType}`, returnStatement));
     }
   }
 }
@@ -522,22 +560,38 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
             }
             else if(isIdentifier(exprTokens[i])){
               if(!isNumberToken(exprTokens[i])) {
-                if(exprTokens[i].val == "Math"){
-                  exprType = "any"
-                  currentToken = exprTokens[i]
+                const name = exprTokens[i].val;
+                const globalObjs = ["Math", "console", "JSON", "Date", "Object", "Array"];
+                const globalFuncs: Record<string, VariableType> = {
+                  log: "void()",
+                  parseInt: "number()",
+                  parseFloat: "number()",
+                  isNaN: "boolean()",
+                  isFinite: "boolean()",
+                  String: "string()",
+                  Number: "number()",
+                  Boolean: "boolean()",
+                };
+
+                if (globalObjs.includes(name)) {
+                  exprType = "any";
+                  currentToken = exprTokens[i];
+                } else if (name in globalFuncs) {
+                  exprType = globalFuncs[name];
+                  currentToken = exprTokens[i];
                 } else {
-                  exprType = getVariableType(exprTokens[i].val)
+                  exprType = getVariableType(name);
                   if(exprType == undefined){
-                    exprType = getFunctionType(exprTokens[i].val,functions)
+                    exprType = getFunctionType(name, functions);
                     if(exprType == undefined){
-                      throw new Error(`Identifier ${exprTokens[i].val} is neither a function nor a variable`)
+                      throw new Error(formatError(`Identifier ${name} is neither a function nor a variable`, exprTokens[i]));
                     }
                     else{
-                      currentToken = exprTokens[i]
+                      currentToken = exprTokens[i];
                     }
                   }
                   else{
-                    currentToken = exprTokens[i]
+                    currentToken = exprTokens[i];
                   }
                 }
               }
@@ -547,30 +601,74 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
               if (exprType && exprType.endsWith("[]")) {
                 if (propName === "length") {
                   exprType = "number";
-                } else if (propName === "push") {
+                } else if (propName === "push" || propName === "unshift") {
                   exprType = "void()";
-                } else if (propName === "pop") {
+                } else if (propName === "pop" || propName === "shift") {
                   exprType = exprType.slice(0, exprType.length - 2) + "()";
-                } else {
-                  throw new Error(`Property ${propName} does not exist on array type ${exprType}`);
-                }
-              } else if (exprType === "string") {
-                if (propName === "length") {
-                  exprType = "number";
-                } else if (propName === "charAt" || propName === "substring") {
-                  exprType = "string()";
+                } else if (["slice", "concat", "reverse"].includes(propName)) {
+                  exprType = exprType + "()";
                 } else if (propName === "indexOf") {
                   exprType = "number()";
                 } else if (propName === "includes") {
                   exprType = "boolean()";
+                } else if (propName === "join") {
+                  exprType = "string()";
                 } else {
-                  throw new Error(`Property ${propName} does not exist on string`);
+                  throw new Error(formatError(`Property ${propName} does not exist on array type ${exprType}`, exprTokens[i+1]));
+                }
+              } else if (exprType === "string") {
+                if (propName === "length") {
+                  exprType = "number";
+                } else if (["charAt", "substring", "slice", "toLowerCase", "toUpperCase", "trim", "replace", "replaceAll", "concat"].includes(propName)) {
+                  exprType = "string()";
+                } else if (["indexOf", "lastIndexOf"].includes(propName)) {
+                  exprType = "number()";
+                } else if (["includes", "startsWith", "endsWith"].includes(propName)) {
+                  exprType = "boolean()";
+                } else if (propName === "split") {
+                  exprType = "string[]()";
+                } else {
+                  throw new Error(formatError(`Property ${propName} does not exist on string`, exprTokens[i+1]));
                 }
               } else if (currentToken.val === "Math") {
-                if (["floor", "sqrt", "abs", "pow", "min", "max", "random", "round"].includes(propName)) {
+                if (["PI", "E"].includes(propName)) {
+                  exprType = "number";
+                } else if (["floor", "ceil", "round", "sqrt", "abs", "pow", "min", "max", "random", "sin", "cos", "tan", "atan2", "log", "exp", "trunc"].includes(propName)) {
                   exprType = "number()";
                 } else {
-                  throw new Error(`Property ${propName} does not exist on Math`);
+                  throw new Error(formatError(`Property ${propName} does not exist on Math`, exprTokens[i+1]));
+                }
+              } else if (currentToken.val === "console") {
+                if (["log", "warn", "error", "info", "clear"].includes(propName)) {
+                  exprType = "void()";
+                } else {
+                  throw new Error(formatError(`Property ${propName} does not exist on console`, exprTokens[i+1]));
+                }
+              } else if (currentToken.val === "JSON") {
+                if (propName === "stringify") {
+                  exprType = "string()";
+                } else if (propName === "parse") {
+                  exprType = "any()";
+                } else {
+                  throw new Error(formatError(`Property ${propName} does not exist on JSON`, exprTokens[i+1]));
+                }
+              } else if (currentToken.val === "Date") {
+                if (["now", "parse"].includes(propName)) {
+                  exprType = "number()";
+                } else {
+                  throw new Error(formatError(`Property ${propName} does not exist on Date`, exprTokens[i+1]));
+                }
+              } else if (currentToken.val === "Object") {
+                if (["keys", "values", "entries", "assign"].includes(propName)) {
+                  exprType = "any()";
+                } else {
+                  throw new Error(formatError(`Property ${propName} does not exist on Object`, exprTokens[i+1]));
+                }
+              } else if (currentToken.val === "Array") {
+                if (propName === "isArray") {
+                  exprType = "boolean()";
+                } else {
+                  throw new Error(formatError(`Property ${propName} does not exist on Array`, exprTokens[i+1]));
                 }
               } else {
                 let struct = getStruct(currentToken.val,variables,structs,functions)
@@ -581,7 +679,7 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
                     found = true
                   }
                 }
-                if(!found) throw new Error(`Property ${propName} does not exist on struct of type ${struct.name}`)
+                if(!found) throw new Error(formatError(`Property ${propName} does not exist on struct of type ${struct.name}`, exprTokens[i+1]))
               }
               currentToken = exprTokens[i+1]
               i+=1
@@ -682,7 +780,8 @@ function checkForErrors(scope:Scope,structs:Struct[],functions:FunctionDefinitio
     if(scope.tokens[i].type == TokenType.IDENTIFIER){
       
       if(scope.tokens[i+1]?.type == TokenType.OPAREN && scope.tokens[i-1]?.type != TokenType.RTYPE){ // Check Function Inputs
-        if(scope.tokens[i].val == "log") continue // TODO : support default js libraary
+        const globalFuncs = ["log", "parseInt", "parseFloat", "isNaN", "isFinite", "String", "Number", "Boolean"];
+        if (globalFuncs.includes(scope.tokens[i].val)) continue;
         if(scope.tokens[i-1]?.type == TokenType.DOT) continue
         let funcInputArgs:Token[][] = []
         let cursor = i+2
@@ -712,15 +811,15 @@ function checkForErrors(scope:Scope,structs:Struct[],functions:FunctionDefinitio
             }
         }
         let func = getFunction(scope.tokens[i].val,functions)
-        if(func == undefined) throw new Error(`Trying to call unknown function: ${scope.tokens[i].val}`)
+        if(func == undefined) throw new Error(formatError(`Trying to call unknown function: ${scope.tokens[i].val}`, scope.tokens[i]))
         let funcVars = func!.inputVars.map(variable => variable.type)
 
         
-        if(isEmpty2DArray(funcInputArgs) && funcVars.length != 0)  throw new Error(`Function ${func.name} must be called with args ${funcVars.length == 0 ? "no arguments" : funcVars} but was called with no arguments`)
+        if(isEmpty2DArray(funcInputArgs) && funcVars.length != 0)  throw new Error(formatError(`Function ${func.name} must be called with args ${funcVars.length == 0 ? "no arguments" : funcVars} but was called with no arguments`, scope.tokens[i]))
         else if(!isEmpty2DArray(funcInputArgs)){
           let funcInputTypes = funcInputArgs.map(el => evaluateType(el,scope.getAllVariables(),structs,functions))
           if(!arraysEqual(funcInputTypes,funcVars)){
-            throw new Error(`Function ${func.name} must be called with args  ${funcVars.length == 0 ? "no arguments" : funcVars} but was called with ${funcInputTypes.length == 0 ? "no arguments" : funcInputTypes}`)
+            throw new Error(formatError(`Function ${func.name} must be called with args  ${funcVars.length == 0 ? "no arguments" : funcVars} but was called with ${funcInputTypes.length == 0 ? "no arguments" : funcInputTypes}`, scope.tokens[i]))
           }
         }
        
@@ -734,7 +833,7 @@ function checkForErrors(scope:Scope,structs:Struct[],functions:FunctionDefinitio
         arrAccessTokens.push(scope.tokens[i])
         i++
       }
-      if(evaluateType(arrAccessTokens,scope.getAllVariables(),structs,functions) != "number") throw new Error(`Array must be indexed with number but was indexed with ${arrAccessTokens.map(el => el.val).join("")}`)
+      if(evaluateType(arrAccessTokens,scope.getAllVariables(),structs,functions) != "number") throw new Error(formatError(`Array must be indexed with number but was indexed with ${arrAccessTokens.map(el => el.val).join("")}`, scope.tokens[i]))
     }
     else if(scope.tokens[i].type == TokenType.EQUAL){
       let right:Token[] = []
@@ -756,14 +855,14 @@ function checkForErrors(scope:Scope,structs:Struct[],functions:FunctionDefinitio
       if(evaluateType(left,scope.getAllVariables(),structs,functions) == "any") continue
       if(evaluateType(left,scope.getAllVariables(),structs,functions) == "any" && evaluateType(right,scope.getAllVariables(),structs,functions).startsWith("any")) continue
       if(evaluateType(right,scope.getAllVariables(),structs,functions) != evaluateType(left,scope.getAllVariables(),structs,functions)){
-        throw new Error(`Cannot assign ${left.map(el => el.val).join("")} to value ${right.map((el) => el.val).join("")} types dont match ${evaluateType(left,scope.getAllVariables(),structs,functions)} => ${evaluateType(right,scope.getAllVariables(),structs,functions)}`)
+        throw new Error(formatError(`Cannot assign ${left.map(el => el.val).join("")} to value ${right.map((el) => el.val).join("")} types dont match ${evaluateType(left,scope.getAllVariables(),structs,functions)} => ${evaluateType(right,scope.getAllVariables(),structs,functions)}`, scope.tokens[i]))
       }
     }
     else if(scope.tokens[i].type == TokenType.PLUSPLUS){
       let left:Token[] = []
       for(let j  = i-1;j>=0 && scope.tokens[j].type != TokenType.NEWLINE && scope.tokens[j].type != TokenType.SEMICOLON;j--) left.unshift(scope.tokens[j])
       if(evaluateType(left,scope.getAllVariables(),structs,functions) != "number"){
-        throw new Error(`Can only increment numbers not ${left.map(el => el.val).join("")} of type ${evaluateType(left,scope.getAllVariables(),structs,functions)}`)
+        throw new Error(formatError(`Can only increment numbers not ${left.map(el => el.val).join("")} of type ${evaluateType(left,scope.getAllVariables(),structs,functions)}`, scope.tokens[i]))
       }
     }
     else if(scope.tokens[i].type == TokenType.MINUSMINUS){
@@ -899,8 +998,8 @@ class Scope{
 export function compile(code :string): { valid: boolean; code: string } {
   variableTypes.length = 0;
   variableTypes.push("number", "boolean", "void", "string", "any");
-  const rawStatements = lex(code).filter((el) => el != "")
-  const statements = rawStatements.filter((el) => el != " " && el != "\r")
+  const rawStatements = lex(code).filter((el) => el.val != "");
+  const statements = rawStatements.filter((el) => el.val != " " && el.val != "\r");
 
   const tokenizer = new Tokenizer(statements)
 

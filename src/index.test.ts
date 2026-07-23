@@ -119,6 +119,14 @@ describe("StaticScript Compiler - Extended Unit Tests (Phases 1 to 3)", () => {
       `;
       expect(() => compile(code)).toThrow(/Property z does not exist on struct/i);
     });
+
+    it("reports exact line and column numbers in error messages", () => {
+      const code = `
+        number valid = 10;
+        number bad = "hello";
+      `;
+      expect(() => compile(code)).toThrow(/\[Line 3:20\]/);
+    });
   });
 
   describe("File-Based Example Suite", () => {
