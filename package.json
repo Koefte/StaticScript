@@ -3,13 +3,21 @@
   "version": "1.0.0",
   "description": "TypeScript with C Syntax",
   "main": "index.js",
+  "bin": {
+    "staticscript": "./bin/staticscript.js"
+  },
   "scripts": {
+    "build": "tsc",
+    "run": "node dist/index.js",
     "test": "jest"
   },
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "testMatch": ["**/__tests__/**/*.ts", "**/*.test.ts", "**/*.spec.ts"]
+    "testMatch": ["**/__tests__/**/*.ts", "**/*.test.ts", "**/*.spec.ts"],
+    "moduleNameMapper": {
+      "^(\\.\\.?/.*)\\.js$": "$1"
+    }
   },
   "repository": {
     "type": "git",

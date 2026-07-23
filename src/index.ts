@@ -46,8 +46,12 @@ function isLetter(str:string):boolean {
   return new RegExp("[a-zA-Z]").test(str);
 }
 
-function isNumber(str:string): boolean{
-  return new RegExp("^[0-9]+$|^-[0-9]+$").test(str)
+function isAlphaNumeric(str:string):boolean {
+  return new RegExp("[a-zA-Z0-9_]").test(str);
+}
+
+function isNumber(str: string): boolean {
+  return new RegExp("^-?[0-9]+(\\.[0-9]+)?$").test(str);
 }
 
 function chop(n:number):string{
@@ -112,26 +116,41 @@ function getStruct(name:string,vars:Variable[],structs:Struct[],functions:Functi
 function lex(code:string):string[]{
   content = code;
   let tokens: string[] = [];
-  for(let i = 0;i<code.length;i++){
-      if(isLetter(code[i])){
-          tokens.push(chopWhile((str:string) => isLetter(str)))
+  while(content.length > 0){
+      let ch = content.charAt(0);
+      if(isLetter(ch)){
+          tokens.push(chopWhile((str:string) => isAlphaNumeric(str)))
       }
 
-      else if(isNumber(code[i])){
-          tokens.push(chopWhile((str:string) => isNumber(str)))  
+      else if(isNumber(ch)){
+          tokens.push(chopWhile((str:string) => isNumber(str) || str === "."))  
       }  
       
-      else if(code[i] == "-"){
-        if(isNumber(code[i+1])){
+      else if(ch == "-"){
+        if(content.length > 1 && isNumber(content.charAt(1))){
           // Include the minus sign in the token
-          tokens.push(chop(1) + chopWhile((str:string) => isNumber(str)));
+          tokens.push(chop(1) + chopWhile((str:string) => isNumber(str) || str === "."));
         } else {
           tokens.push(chop(1));
         }
       }
       
 
-      else if(code[i] != "") tokens.push(chop(1))
+      else if(ch == '"'){
+        chop(1);
+        let strContent = "";
+        while(content.length > 0 && content.charAt(0) != '"'){
+          if(content.charAt(0) == '\\' && content.length > 1){
+            strContent += chop(2);
+          } else {
+            strContent += chop(1);
+          }
+        }
+        chop(1);
+        tokens.push('"' + strContent + '"');
+      }
+
+      else if(ch != "") tokens.push(chop(1))
   } 
   return tokens
 }
@@ -143,7 +162,7 @@ function transpile(tokens:Token[]): string{
     for(let i = 0;i<tokens.length;i++){
         let token = tokens[i]
         if(token.type == TokenType.TYPE){
-            result += "let"
+            result += "let "
         }
         else if(token.type == TokenType.STRUCT){
           while(tokens[i].type != TokenType.CBRACE) i++
@@ -152,13 +171,14 @@ function transpile(tokens:Token[]): string{
           result += `"${token.val}"`
         }
         else if(token.type == TokenType.RTYPE){
-          result += "function"
+          result += "function "
         }
         else if(token.type == TokenType.FTYPE){
           continue
         }
         else{
-            result += token.val
+            let addSpace = ["if", "for", "while", "return", "else"].includes(token.val);
+            result += token.val + (addSpace ? " " : "");
         }
     }
     return result
@@ -179,10 +199,11 @@ function analyzeFunctions(tokens: Token[],rootScope:Scope): FunctionDefinition[]
       let originIndex = i
       while(tokens[originIndex].type != TokenType.OBRACE && originIndex < tokens.length) originIndex++
       originIndex++
-      while (tokens[i].type != TokenType.CBRACE && i < tokens.length) {
-        i++;
+      let endBraceIdx = findMatchingCBrace(tokens, originIndex)
+      let scope = findScope(rootScope, originIndex, endBraceIdx)
+      if (scope) {
+        scope.variables.push(...vars);
       }
-      let scope = findScope(rootScope,originIndex,i)
       functions.push({ name: functionName, returnType,inputVars:vars,scope: scope!});
     }
      
@@ -225,7 +246,7 @@ function analyzeVariables(tokens: Token[]): Variable[]{
 }
 
 function  join(inner:Variable[],outer:Variable[]):Variable[]{
-  let joined = inner
+  let joined = [...inner]
   let innerNames = inner.map(variable => variable.name)
   for(let variable of outer){
     if(!innerNames.includes(variable.name)) joined.push(variable)
@@ -233,8 +254,16 @@ function  join(inner:Variable[],outer:Variable[]):Variable[]{
   return joined
 }
 
+function getScopeReturnStatements(scope: Scope): Token[] {
+  let returns: Token[] = scope.tokens.filter(token => token.type === TokenType.RETURN);
+  for (let child of scope.children) {
+    returns.push(...getScopeReturnStatements(child));
+  }
+  return returns;
+}
+
 function checkFunctionForErrors(func: FunctionDefinition,allTokens:Token[],structs:Struct[],functions:FunctionDefinition[]): void {
-  let returnStatements = allTokens.filter(token => token.type === TokenType.RETURN);
+  let returnStatements = getScopeReturnStatements(func.scope);
   
   if(returnStatements.length == 0 && func.returnType != "void"){
     throw new Error(`Function ${func.name} of type ${func.returnType} must return something`)
@@ -279,7 +308,8 @@ function checkFunctionForErrors(func: FunctionDefinition,allTokens:Token[],struc
     if(right.length == 0 || (right.length <= 1 && right[0]?.type == TokenType.SEMICOLON)){
       throw new Error(`Function ${func.name} of type ${func.returnType} must return a value`)
     }
-    let returnType = evaluateType(right.filter(el => el.type != TokenType.NEWLINE),func.scope.getAllVariables(),structs,functions);
+    let scopeVars = join(func.scope.getAllVariables(), func.inputVars);
+    let returnType = evaluateType(right.filter(el => el.type != TokenType.NEWLINE), scopeVars, structs, functions);
     if (returnType !== func.returnType) {
       throw new Error(`Function ${func.name} should return ${func.returnType} but returns ${returnType}`);
     }
@@ -381,7 +411,8 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
   };
 
   const isBooleanOperator = (token: Token) => {
-    return token.type === TokenType.AND || token.type === TokenType.OR || token.type === TokenType.NOT;
+    return token.type === TokenType.AND || token.type === TokenType.OR || token.type === TokenType.NOT ||
+      [TokenType.EQEQ, TokenType.NEQ, TokenType.LESSTHAN, TokenType.GREATERTHAN, TokenType.LESSEQ, TokenType.GREATEREQ].includes(token.type);
   };
 
   const isIdentifier = (token: Token) => {
@@ -402,6 +433,7 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
   // Helper function to evaluate expressions within parentheses
   const evaluateExpression = (exprTokens: Token[]): VariableType => {
     let currentType: VariableType | null = null;
+    let hasLogicalOp = false;
     for (let i = 0; i < exprTokens.length; i++) {
       let token = exprTokens[i];
       if (isNumberToken(token)) {
@@ -416,7 +448,6 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
         } else if (currentType !== "string") {
           throw new Error(`Type mismatch: expected ${currentType} but found string`);
         }
-       
       } 
       else if(token.type == TokenType.TYPE){
         if(currentType != null) throw new Error("I dont see this happening")
@@ -460,12 +491,13 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
           if(balance != 0) structTokens.push(exprTokens[i])
           i++
         }
-        let keyValuePairs = splitArrayValues(structTokens)
+        let keyValuePairs = splitArrayValues(structTokens).filter(pair => pair.length > 0 && pair.some(tok => tok.type === TokenType.IDENTIFIER));
         let keys:string[] = []
         let types : VariableType[] = []
         for(let keyValuePair of keyValuePairs){
           let keyValuePairSplit= splitByRespectingNesting(keyValuePair,TokenType.COLON,TokenType.OBRACE,TokenType.CBRACE)
-          keys.push(keyValuePairSplit[0][0].val)
+          let keyTok = keyValuePairSplit[0].find(tok => tok.type === TokenType.IDENTIFIER);
+          if (keyTok) keys.push(keyTok.val);
           types.push(evaluateType(keyValuePairSplit[1],variables,structs,functions))
         }
         let matchingStruct:Struct|undefined = undefined;
@@ -490,33 +522,67 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
             }
             else if(isIdentifier(exprTokens[i])){
               if(!isNumberToken(exprTokens[i])) {
-                exprType = getVariableType(exprTokens[i].val)
-                if(exprType == undefined){
-                  exprType = getFunctionType(exprTokens[i].val,functions)
+                if(exprTokens[i].val == "Math"){
+                  exprType = "any"
+                  currentToken = exprTokens[i]
+                } else {
+                  exprType = getVariableType(exprTokens[i].val)
                   if(exprType == undefined){
-                    throw new Error(`Identifier ${exprTokens[i].val} is neither a function nor a variable`)
+                    exprType = getFunctionType(exprTokens[i].val,functions)
+                    if(exprType == undefined){
+                      throw new Error(`Identifier ${exprTokens[i].val} is neither a function nor a variable`)
+                    }
+                    else{
+                      currentToken = exprTokens[i]
+                    }
                   }
                   else{
                     currentToken = exprTokens[i]
                   }
                 }
-                else{
-                  currentToken = exprTokens[i]
-                }
               }
             }
             else if(exprTokens[i].type == TokenType.DOT){
-              let struct = getStruct(currentToken.val,variables,structs,functions)
-              let found = false
-              for(let variable of struct.vars){
-                
-                if(variable.name == exprTokens[i+1].val) {
-                  exprType = variable.type
-                  found = true
+              let propName = exprTokens[i+1].val;
+              if (exprType && exprType.endsWith("[]")) {
+                if (propName === "length") {
+                  exprType = "number";
+                } else if (propName === "push") {
+                  exprType = "void()";
+                } else if (propName === "pop") {
+                  exprType = exprType.slice(0, exprType.length - 2) + "()";
+                } else {
+                  throw new Error(`Property ${propName} does not exist on array type ${exprType}`);
                 }
-                
+              } else if (exprType === "string") {
+                if (propName === "length") {
+                  exprType = "number";
+                } else if (propName === "charAt" || propName === "substring") {
+                  exprType = "string()";
+                } else if (propName === "indexOf") {
+                  exprType = "number()";
+                } else if (propName === "includes") {
+                  exprType = "boolean()";
+                } else {
+                  throw new Error(`Property ${propName} does not exist on string`);
+                }
+              } else if (currentToken.val === "Math") {
+                if (["floor", "sqrt", "abs", "pow", "min", "max", "random", "round"].includes(propName)) {
+                  exprType = "number()";
+                } else {
+                  throw new Error(`Property ${propName} does not exist on Math`);
+                }
+              } else {
+                let struct = getStruct(currentToken.val,variables,structs,functions)
+                let found = false
+                for(let variable of struct.vars){
+                  if(variable.name == propName) {
+                    exprType = variable.type
+                    found = true
+                  }
+                }
+                if(!found) throw new Error(`Property ${propName} does not exist on struct of type ${struct.name}`)
               }
-              if(!found) throw new Error(`Property ${exprTokens[i+1].val} does not exist on struct of type ${struct.name}`)
               currentToken = exprTokens[i+1]
               i+=1
             }
@@ -534,6 +600,7 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
           if(exprType == undefined) throw new Error("Error whilst trying to evaluate identifier expression")
           if(currentType == null) currentType = exprType
           else if(currentType != exprType) throw new Error(`Type mismatch ${currentType} : ${exprType}`)
+          i--
 
       } else if ([ TokenType.MINUS, TokenType.MULTIPLY, TokenType.DIVIDE].includes(token.type)) {
         if (currentType != "number") {
@@ -545,11 +612,8 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
         }
       } 
       else if (isBooleanOperator(token)) {
-        if (currentType === null) {
-          currentType = "boolean";
-        } else if (currentType !== "boolean") {
-          throw new Error(`Type mismatch: expected ${currentType} but found boolean operator`);
-        }
+        hasLogicalOp = true;
+        currentType = null;
       }else if (token.type === TokenType.OPAREN) {
         let parenTokens: Token[] = [];
         let balance = 1;
@@ -571,13 +635,16 @@ function evaluateType(tokens: Token[], variables: Variable[],structs:Struct[],fu
       }
     }
 
+    if (hasLogicalOp) return "boolean";
+
     if (currentType === null) {
       throw new Error(`Unable to evaluate type of the expression`);
     }
 
-    return currentType;
+    return currentType!;
   };
 
+  if (!tokens || tokens.length === 0) return "any";
   return evaluateExpression(tokens);
 }
 
@@ -616,6 +683,7 @@ function checkForErrors(scope:Scope,structs:Struct[],functions:FunctionDefinitio
       
       if(scope.tokens[i+1]?.type == TokenType.OPAREN && scope.tokens[i-1]?.type != TokenType.RTYPE){ // Check Function Inputs
         if(scope.tokens[i].val == "log") continue // TODO : support default js libraary
+        if(scope.tokens[i-1]?.type == TokenType.DOT) continue
         let funcInputArgs:Token[][] = []
         let cursor = i+2
         let parenBalance = 1; // starting from the opening '('
@@ -672,6 +740,7 @@ function checkForErrors(scope:Scope,structs:Struct[],functions:FunctionDefinitio
       let right:Token[] = []
       let left:Token[] = []
       for(let j  = i-1;j>=0 && scope.tokens[j].type != TokenType.NEWLINE && scope.tokens[j].type != TokenType.SEMICOLON;j--) left.unshift(scope.tokens[j])
+      if(left.some(tok => [TokenType.STRUCT, TokenType.IF, TokenType.WHILE, TokenType.FOR, TokenType.ELSE].includes(tok.type))) continue;
       for(let j = i+1;j<scope.tokens.length && scope.tokens[j].type != TokenType.NEWLINE && scope.tokens[j].type != TokenType.SEMICOLON;j++){
         if(scope.tokens[j].type == TokenType.OBRACE){
           let balance = 1
@@ -686,7 +755,6 @@ function checkForErrors(scope:Scope,structs:Struct[],functions:FunctionDefinitio
       }
       if(evaluateType(left,scope.getAllVariables(),structs,functions) == "any") continue
       if(evaluateType(left,scope.getAllVariables(),structs,functions) == "any" && evaluateType(right,scope.getAllVariables(),structs,functions).startsWith("any")) continue
-      console.log(left,right)
       if(evaluateType(right,scope.getAllVariables(),structs,functions) != evaluateType(left,scope.getAllVariables(),structs,functions)){
         throw new Error(`Cannot assign ${left.map(el => el.val).join("")} to value ${right.map((el) => el.val).join("")} types dont match ${evaluateType(left,scope.getAllVariables(),structs,functions)} => ${evaluateType(right,scope.getAllVariables(),structs,functions)}`)
       }
@@ -769,8 +837,8 @@ function checkForErrors(scope:Scope,structs:Struct[],functions:FunctionDefinitio
 }
 
 function findMatchingCBrace(tokens:Token[],beginIdx:number) : number{
+  let balance = 1;
   for(let i =  beginIdx;i<tokens.length;i++){
-    let balance = 1
     if(tokens[i].type == TokenType.CBRACE) balance--
     if(tokens[i].type == TokenType.OBRACE) balance++
     if(balance == 0) return i
@@ -801,7 +869,7 @@ class Scope{
     for(let i = beginIdx;i<endIdx;i++){
       let token = inputTokens[i]
       if(token.type == TokenType.OBRACE && !lastTokenIs(inputTokens,TokenType.EQUAL,i-1) && !lastTokenIs(inputTokens,TokenType.STYPE,i-1)){ // TODO: fix for standalone nesting
-        let matchingCBraceIdx = findMatchingCBrace(inputTokens,i)
+        let matchingCBraceIdx = findMatchingCBrace(inputTokens,i + 1)
         let childScope = new Scope(inputTokens,i+1,matchingCBraceIdx)
         this.children.push(childScope)
         childScope.parent = this
@@ -828,7 +896,9 @@ class Scope{
 
 
 
-export function compile(code :string){
+export function compile(code :string): { valid: boolean; code: string } {
+  variableTypes.length = 0;
+  variableTypes.push("number", "boolean", "void", "string", "any");
   const rawStatements = lex(code).filter((el) => el != "")
   const statements = rawStatements.filter((el) => el != " " && el != "\r")
 
@@ -841,10 +911,10 @@ export function compile(code :string){
   let functions = analyzeFunctions(allTokens,rootScope)
   checkFunctionsForErrors(functions,allTokens,structs)
   checkForErrors(rootScope,structs,functions)
+
+  const jsCode = transpile(allTokens);
+  return { valid: true, code: jsCode };
 }
-
-
-
 
 
 

@@ -34,7 +34,17 @@ export enum TokenType {
   COMMA,
   DOT,
   STRUCT,
-  COLON
+  COLON,
+  IF,
+  ELSE,
+  WHILE,
+  FOR,
+  EQEQ,
+  NEQ,
+  LESSTHAN,
+  GREATERTHAN,
+  LESSEQ,
+  GREATEREQ
 }
 
 export type Token = {
@@ -151,6 +161,7 @@ export class Tokenizer {
             }
             else if(this.content[j] == "{"){
               tokens.push({type:TokenType.STYPE,val:type})
+              break
             }
             else if(this.content[j] == ")"){
               tokens.push({type:TokenType.FTYPE,val:type})
@@ -158,18 +169,27 @@ export class Tokenizer {
             }
           }
         }
-        else if(this.content[i] == `"`){
-          let text = ""
-          i++
-          while(this.content[i] != `"`){
-            text += this.content[i]
+        else if(this.content[i] == `"` || (this.content[i].startsWith(`"`) && this.content[i].endsWith(`"`))){
+          if(this.content[i].length > 1 && this.content[i].startsWith(`"`) && this.content[i].endsWith(`"`)){
+            tokens.push({type:TokenType.STRING,val:this.content[i].slice(1,-1)})
+          } else {
+            let text = ""
             i++
+            while(i < this.content.length && this.content[i] != `"`){
+              text += (text.length > 0 ? " " : "") + this.content[i]
+              i++
+            }
+            tokens.push({type:TokenType.STRING,val:text})
           }
-          tokens.push({type:TokenType.STRING,val:text})
         }
         else if(this.content[i] == "="){
-          if(this.content[i+1] != "=" && this.content[i] != ">")
+          if(this.content[i+1] == "="){
+            tokens.push({type:TokenType.EQEQ,val:"=="})
+            i++
+          }
+          else if(this.content[i+1] != ">"){
             tokens.push({type:TokenType.EQUAL,val:this.content[i]})
+          }
         }
         else if(this.content[i] == ","){
           tokens.push({type:TokenType.COMMA,val:this.content[i]})
@@ -177,6 +197,7 @@ export class Tokenizer {
         else if(this.content[i] == "+"){
           if(this.content[i+1] == "+"){
             tokens.push({type:TokenType.PLUSPLUS,val:"++"})
+            i++
           }
           else if(this.content[i+1] == "="){
             tokens.push({type:TokenType.PLUSEQUAL,val:"+="})
@@ -189,6 +210,7 @@ export class Tokenizer {
         else if(this.content[i] == "-"){
           if(this.content[i+1] == "-"){
             tokens.push({type:TokenType.MINUSMINUS,val:"--"})
+            i++
           }
           else if(this.content[i+1] == "="){
             tokens.push({type:TokenType.MINUSEQUAL,val:"-="})
@@ -241,8 +263,27 @@ export class Tokenizer {
           tokens.push({type:TokenType.CBRACKET,val:this.content[i]})
         }
         else if(this.content[i] == "!"){
-          if(this.content[i+1] != "="){
+          if(this.content[i+1] == "="){
+            tokens.push({type:TokenType.NEQ,val:"!="})
+            i++
+          } else {
             tokens.push({type:TokenType.NOT,val:this.content[i]})
+          }
+        }
+        else if(this.content[i] == "<"){
+          if(this.content[i+1] == "="){
+            tokens.push({type:TokenType.LESSEQ,val:"<="})
+            i++
+          } else {
+            tokens.push({type:TokenType.LESSTHAN,val:"<"})
+          }
+        }
+        else if(this.content[i] == ">"){
+          if(this.content[i+1] == "="){
+            tokens.push({type:TokenType.GREATEREQ,val:">="})
+            i++
+          } else {
+            tokens.push({type:TokenType.GREATERTHAN,val:">"})
           }
         }
         else if(this.content[i] == "&"){
@@ -257,6 +298,18 @@ export class Tokenizer {
         }
         else if(this.content[i] == "return"){
           tokens.push({type:TokenType.RETURN,val:this.content[i]})
+        }
+        else if(this.content[i] == "if"){
+          tokens.push({type:TokenType.IF,val:this.content[i]})
+        }
+        else if(this.content[i] == "else"){
+          tokens.push({type:TokenType.ELSE,val:this.content[i]})
+        }
+        else if(this.content[i] == "for"){
+          tokens.push({type:TokenType.FOR,val:this.content[i]})
+        }
+        else if(this.content[i] == "while"){
+          tokens.push({type:TokenType.WHILE,val:this.content[i]})
         }
         else if(this.content[i] == "struct"){
           tokens.push({type:TokenType.STRUCT,val:this.content[i]})

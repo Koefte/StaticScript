@@ -1,0 +1,2 @@
+string greeting = "hello";
+greeting++;
