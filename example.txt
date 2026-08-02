@@ -1,1 +1,2 @@
-number x = "hey";
+string x = "hey";
+number y = x;
