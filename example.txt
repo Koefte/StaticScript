@@ -1,1 +1,1 @@
-boolean taut = true && 3;
+number x = "hey";

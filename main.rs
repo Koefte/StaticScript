@@ -1,6 +1,7 @@
 use std::fs;
 use std::error::Error;
 
+
 #[derive(Debug,Eq,PartialEq,Clone)]
 enum Token{
     String,
@@ -44,6 +45,9 @@ struct Parser {
 enum BinOp { Add, Sub, Mul, Div }
 
 #[derive(Debug)]
+enum UnaryOp {Add,Sub}
+
+#[derive(Debug)]
 enum BoolOp {OrOr,AndAnd,Greater,Less}
 
 #[derive(Debug,PartialEq,Eq)]
@@ -55,6 +59,7 @@ enum Expr{
     AssignOp(Box<Expr>,Box<Expr>),
     BinOp(BinOp,Box<Expr>,Box<Expr>),
     BoolOp(BoolOp,Box<Expr>,Box<Expr>),
+    UnaryOp(UnaryOp,Box<Expr>),
     NumberLiteral(i32),
     Identifier(String),
     StringLiteral(String),
@@ -112,6 +117,14 @@ fn check_type(expr:  Expr) ->  Type{
                 lhs_type
             }
         },
+        Expr::UnaryOp(_,expr) => {
+            let _type = check_type(*expr);
+
+            if _type != Type::Number {
+                panic!("Can only unary numbers!");
+            }
+            _type
+        }
         Expr::StringLiteral(_) => Type::String,
         Expr::NumberLiteral(_) => Type::Number,
         Expr::BooleanLiteral(_) => Type::Boolean,
@@ -144,8 +157,45 @@ impl Parser {
         else {
             return Err(String::from("Expected = sign"));
         }
-        let rhs = self.parse_expr_boolean();
+        let rhs = self.parse_expr_unary();
         Ok(Expr::AssignOp(Box::new(lhs?),Box::new(rhs?)))
+    }
+
+    fn parse_expr_unary(&mut self) -> Result<Expr,String> {
+        let mut op = UnaryOp::Add;
+        if matches!(self.current(),Token::Sub | Token::Add) {
+            op = match self.current(){
+                Token::Sub => UnaryOp::Sub,
+                Token::Add => UnaryOp::Add,
+                _ => unreachable!()
+            };
+            self.consume();
+        }
+        else{
+            return Err(String::from("Expected unary operator"));
+        }
+        let expr = self.parse_expr_boolean();
+        Ok(Expr::UnaryOp(op,Box::new(expr?)))
+    }
+   
+
+    fn parse_expr_boolean(&mut self) -> Result<Expr,String> {
+        let mut left = self.parse_expr_boolean_sub()?;
+
+        while matches!(self.current(),Token::AndAnd | Token::OrOr){
+            let op_token = self.current().clone();
+            self.consume();
+
+            let op = match op_token {
+                Token::Greater => BoolOp::Greater,
+                Token::Less => BoolOp::Less,
+                _ => todo!("{}",format!("{:?}",op_token))
+            };
+            let right = self.parse_expr_boolean_sub()?;
+            left = Expr::BoolOp(op,Box::new(left),Box::new(right));
+
+        }
+        Ok(left)
     }
 
     fn parse_expr_boolean_sub(&mut self) -> Result<Expr,String> {
@@ -161,25 +211,6 @@ impl Parser {
                 _ => unreachable!()
             };
             let right = self.parse_expr_arithmetic()?;
-            left = Expr::BoolOp(op,Box::new(left),Box::new(right));
-
-        }
-        Ok(left)
-    }
-
-    fn parse_expr_boolean(&mut self) -> Result<Expr,String> {
-        let mut left = self.parse_expr_boolean_sub()?;
-
-        while matches!(self.current(),Token::AndAnd | Token::OrOr){
-            let op_token = self.current().clone();
-            self.consume();
-
-            let op = match op_token {
-                Token::Greater => BoolOp::Greater,
-                Token::Less => BoolOp::Less,
-                _ => todo!("{}",format!("{:?}",op_token))
-            };
-            let right = self.parse_expr_boolean_sub()?;
             left = Expr::BoolOp(op,Box::new(left),Box::new(right));
 
         }
