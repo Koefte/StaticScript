@@ -2,11 +2,9 @@ use std::fs;
 use std::error::Error;
 use std::collections::HashMap;
 
+
 #[derive(Debug, Eq, PartialEq, Clone)]
 enum Token {
-    String,
-    Number,
-    Boolean,
     NumberLiteral(i32),
     Greater,
     Less,
@@ -20,6 +18,8 @@ enum Token {
     CParen,
     OBrace,
     CBrace,
+    OBracket,
+    CBracket,
     Equals,
     Add,
     Multiply,
@@ -44,7 +44,7 @@ struct Analyzer {
     variables: Variables,
 }
 
-type Variables = Vec<HashMap<String, Type>>;
+type Variables = Vec<HashMap<String, String>>;
 
 #[derive(Debug, Clone)]
 enum BinOp { Add, Sub, Mul, Div }
@@ -55,13 +55,12 @@ enum UnaryOp { Add, Sub }
 #[derive(Debug, Clone)]
 enum BoolOp { OrOr, AndAnd, Greater, Less }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-enum Type { Number, String, Boolean ,None}
 
-#[derive(Debug, Clone)]
+
+#[derive(Debug)]
 enum Expr {
     Scope(Vec<Expr>, Vec<Expr>), // Vec<AssignOps> Vec<Scopes>
-    VariableDecl(Type, String),
+    VariableDecl(String, String),
     AssignOp(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     BoolOp(BoolOp, Box<Expr>, Box<Expr>),
@@ -86,7 +85,7 @@ impl Analyzer {
         self.variables.pop();
     }
     
-    fn get_var_type(&self, name: &str) -> Option<Type> {
+    fn get_var_type(&self, name: &str) -> Option<String> {
         for scope in self.variables.iter().rev() {
             if let Some(t) = scope.get(name) {
                 return Some(t.clone());
@@ -95,12 +94,12 @@ impl Analyzer {
         None
     }
 
-    fn declare_var(&mut self, name: String, t: Type) {
+    fn declare_var(&mut self, name: String, t: String) {
         let current_scope = self.variables.last_mut().unwrap();
         current_scope.insert(name, t);
     }
 
-    fn check_type(&mut self, expr: Expr) -> Type {
+    fn check_type(&mut self, expr: Expr) -> String {
         match expr {
             Expr::Scope(assigns, scopes) => {
                 self.enter_scope(); 
@@ -112,7 +111,7 @@ impl Analyzer {
                 }
                 
                 self.exit_scope();
-                Type::None 
+                String::from("")
             },
             Expr::AssignOp(lhs, rhs) => {
                 let rhs_type = self.check_type(*rhs);
@@ -137,7 +136,7 @@ impl Analyzer {
                 let rhs_type = self.check_type(*rhs);
                 if lhs_type != rhs_type {
                     panic!("BinOp mismatch: cannot add {:?} and {:?}", lhs_type, rhs_type);
-                } else if lhs_type != Type::String && lhs_type != Type::Number {
+                } else if lhs_type != "String" && lhs_type != "Number" {
                     panic!("Can only add numbers or strings");
                 } else {
                     lhs_type
@@ -148,7 +147,7 @@ impl Analyzer {
                 let rhs_type = self.check_type(*rhs);
                 if lhs_type != rhs_type {
                     panic!("BinOp mismatch: cannot operate on {:?} and {:?}", lhs_type, rhs_type);
-                } else if lhs_type != Type::Number {
+                } else if lhs_type != "Number" {
                     panic!("Can only perform arithmetic on numbers");
                 } else {
                     lhs_type
@@ -162,28 +161,28 @@ impl Analyzer {
                 }
                 match op {
                     BoolOp::Greater | BoolOp::Less => {
-                        if lhs_type != Type::Number {
+                        if lhs_type != "Number" {
                             panic!("Greater/Less operations require Numbers");
                         }
                     },
                     BoolOp::AndAnd | BoolOp::OrOr => {
-                        if lhs_type != Type::Boolean {
+                        if lhs_type != "Boolean" {
                             panic!("And/Or operations require Booleans");
                         }
                     }
                 }
-                Type::Boolean // Relational and logical ops always return Boolean
+                "Boolean".to_string() // Relational and logical ops always return Boolean
             },
             Expr::UnaryOp(_, expr) => {
                 let _type = self.check_type(*expr);
-                if _type != Type::Number {
+                if _type != "Number" {
                     panic!("Can only perform unary operations on numbers!");
                 }
                 _type
             }
-            Expr::StringLiteral(_) => Type::String,
-            Expr::NumberLiteral(_) => Type::Number,
-            Expr::BooleanLiteral(_) => Type::Boolean,
+            Expr::StringLiteral(_) => "String".to_string(),
+            Expr::NumberLiteral(_) => "Number".to_string(),
+            Expr::BooleanLiteral(_) => "Boolean".to_string(),
             Expr::VariableDecl(_type, name) => {
                 self.declare_var(name,_type.clone());
                 _type
@@ -276,13 +275,41 @@ impl Parser {
                 return Err(format!("Expected identifier for reassignment, found {:?}", lhs_tokens[0]));
             }
         } else if lhs_tokens.len() == 2 {
-            let (type_expr, name_str) = match &lhs_tokens[..] {
-                [Token::Number, Token::Identifier(name)]  => (Type::Number, name),
-                [Token::String, Token::Identifier(name)]  => (Type::String, name),
-                [Token::Boolean, Token::Identifier(name)] => (Type::Boolean, name),
+            let (type_str, name_str) = match &lhs_tokens[..] {
+                [Token::Identifier(_type), Token::Identifier(name)]  => (_type, name),
                 _ => return Err(format!("Invalid tokens in variable dec! {:?}", lhs_tokens))
             };
-            return Ok(Expr::VariableDecl(type_expr, name_str.to_string()));
+            return Ok(Expr::VariableDecl(type_str.to_string(), name_str.to_string()));
+        } 
+        else{
+           if !matches!(lhs_tokens[0],Token::Identifier(_)) {
+                return Err(format!("First token in variable declaration must be identifier!"));
+           } 
+           let mut type_str : String = match &lhs_tokens[0] {
+                Token::Identifier(_type) => _type.clone(),
+                _                        => unreachable!()
+           };
+
+           let mut i = 1;
+           let mut needsClosing = false;
+           while matches!(lhs_tokens[i],Token::OBracket | Token::CBracket){
+                match lhs_tokens[i] {
+                    Token::OBracket if !needsClosing => { type_str.push('['); needsClosing = true},
+                    Token::CBracket if  needsClosing => { type_str.push(']'); needsClosing = false},
+                    Token::OBracket | Token::CBracket => {return Err(format!("Bracket mismatch in type declaration"));},
+                    _ => {unreachable!();}
+                }
+                i += 1;
+            }
+
+            if let Token::Identifier(name) = &lhs_tokens[lhs_tokens.len() - 1] {
+                return Ok(Expr::VariableDecl(type_str, name.clone())); 
+            }
+            else{
+                return Err(format!("No variable name"));
+            }
+
+            
         }
 
         Err(format!("LHS must be 1 (reassignment) or 2 (declaration) tokens, found {}", lhs_tokens.len()))
@@ -446,9 +473,6 @@ impl Tokenizer {
             }
             
             let token = match self.accumulator.as_str() {
-                "string"   => Token::String,
-                "number"   => Token::Number,
-                "boolean"  => Token::Boolean,
                 "false"    => Token::BooleanLiteral(false),
                 "true"     => Token::BooleanLiteral(true),
                 _          => Token::Identifier(self.accumulator.clone())        
@@ -503,6 +527,8 @@ impl Tokenizer {
                 '-' => Token::Sub,
                 '>' => Token::Greater,
                 '<' => Token::Less,
+                '[' => Token::OBracket,
+                ']' => Token::CBracket,
                 _   => Token::Unknown(c.to_string()) 
             };
             
@@ -513,21 +539,21 @@ impl Tokenizer {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let types : Vec<&str>  = vec!["Number","Boolean","String"];
+    
     let message: String = fs::read_to_string("example.txt")?;
     
-    println!("--- Source Code ---");
-    println!("{}", message);
     
     let mut tokenizer = Tokenizer::new(message);
     let tokens: Vec<Token> = std::iter::from_fn(|| tokenizer.next_token()).collect();
     
+    println!("{:?}",tokens);
+
     let mut parser = Parser::new(tokens);
     let root = parser.parse_scope()?;
 
-    println!("\n--- Abstract Syntax Tree ---");
-    println!("{:#?}", root);
+    println!("{:?}", root);
 
-    println!("\n--- Semantic Analysis ---");
     let mut analyzer = Analyzer::new();
     analyzer.check_type(root);
     
