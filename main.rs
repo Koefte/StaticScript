@@ -2,7 +2,6 @@ use std::fs;
 use std::error::Error;
 use std::collections::HashMap;
 
-
 #[derive(Debug, Eq, PartialEq, Clone)]
 enum Token {
     NumberLiteral(i32),
@@ -24,6 +23,7 @@ enum Token {
     Comma,
     Add,
     Multiply,
+    Return,
     Sub,
     Divide,
     EOF,
@@ -43,6 +43,7 @@ struct Parser {
 
 struct Analyzer {
     variables: Variables,
+    functions: HashMap<String, (String, Vec<String>)>,
 }
 
 type Variables = Vec<HashMap<String, String>>;
@@ -56,16 +57,17 @@ enum UnaryOp { Add, Sub }
 #[derive(Debug, Clone)]
 enum BoolOp { OrOr, AndAnd, Greater, Less }
 
-
-
 #[derive(Debug)]
 enum Expr {
-    Scope(Vec<Expr>, Vec<Expr>), // Vec<AssignOps> Vec<Scopes>
+    Scope(Vec<Expr>), 
+    Document(Vec<Expr>),
     VariableDecl(String, String),
+    FunDecl(String, String, Vec<Expr>, Box<Expr>),
     AssignOp(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     BoolOp(BoolOp, Box<Expr>, Box<Expr>),
     UnaryOp(UnaryOp, Box<Expr>),
+    ReturnExpr(Box<Expr>),
     FunCall(Box<Expr>, Vec<Box<Expr>>),
     ArrayLiteral(Vec<Expr>),
     NumberLiteral(i32),
@@ -76,14 +78,17 @@ enum Expr {
 
 impl Analyzer {
     fn new() -> Self {
-        Analyzer { variables: vec![HashMap::new()]}
+        Analyzer { 
+            functions: HashMap::new(), 
+            variables: vec![HashMap::new()]
+        }
     }
 
-    fn enter_scope(&mut self){
+    fn enter_scope(&mut self) {
         self.variables.push(HashMap::new());
     }
 
-    fn exit_scope(&mut self){
+    fn exit_scope(&mut self) {
         self.variables.pop();
     }
     
@@ -103,31 +108,75 @@ impl Analyzer {
 
     fn check_type(&mut self, expr: Expr) -> String {
         match expr {
-            Expr::Scope(assigns, scopes) => {
-                self.enter_scope(); 
-                for assign in assigns {
-                    self.check_type(assign);
+            Expr::Document(stmts) => {
+                for stmt in stmts {
+                    self.check_type(stmt);
                 }
-                for scope in scopes {
-                    self.check_type(scope);
+                String::new()
+            },
+            Expr::Scope(statements) => {
+                self.enter_scope(); 
+                for stmt in statements {
+                    self.check_type(stmt);
+                }
+                self.exit_scope();
+                String::new()
+            },
+            Expr::FunDecl(ret_type, name, params, body) => {
+                let mut param_types = Vec::new();
+                
+                self.enter_scope();
+                
+                for param in params {
+                    if let Expr::VariableDecl(p_type, p_name) = param {
+                        self.declare_var(p_name, p_type.clone());
+                        param_types.push(p_type);
+                    }
                 }
                 
+                self.functions.insert(name, (ret_type.clone(), param_types));
+                
+                self.check_type(*body);
                 self.exit_scope();
-                String::from("")
+                ret_type
+            },
+            Expr::ReturnExpr(expr) => {
+                self.check_type(*expr)
+            },
+            Expr::FunCall(name_expr, args) => {
+                if let Expr::Identifier(name) = *name_expr {
+                    if let Some((ret_type, param_types)) = self.functions.get(&name).cloned() {
+                        if args.len() != param_types.len() {
+                            panic!("Function '{}' expects {} arguments, got {}", name, param_types.len(), args.len());
+                        }
+
+                        for (i, arg) in args.into_iter().enumerate() {
+                            let arg_type = self.check_type(*arg);
+                            let expected_type = &param_types[i];
+                            
+                            if arg_type != *expected_type {
+                                panic!("Argument type mismatch in '{}' at position {}: expected {}, found {}", name, i + 1, expected_type, arg_type);
+                            }
+                        }
+                        
+                        return ret_type;
+                    } else {
+                        panic!("Call to undefined function: {}", name);
+                    }
+                }
+                panic!("Function call must use an identifier");
             },
             Expr::ArrayLiteral(elements) => {
                 if elements.is_empty() {
                     return "EmptyArray".to_string();
                 }
                 let mut iter = elements.into_iter();
-                
-                let first_type = self.check_type(iter.next().expect("Empty arrays not supported"));
+                let first_type = self.check_type(iter.next().unwrap());
 
                 if !iter.all(|el| self.check_type(el) == first_type) {
-                    panic!("Array element type mismatch: all elements must be {}", first_type);
+                    panic!("Array element type mismatch");
                 }
-                
-                format!("{}[]", first_type).to_lowercase()
+                format!("{}[]", first_type)
             },
             Expr::AssignOp(lhs, rhs) => {
                 let rhs_type = self.check_type(*rhs);
@@ -138,9 +187,8 @@ impl Analyzer {
 
                 if !is_valid {
                     panic!("Assign mismatch: Tried assigning {:?} to {:?}", rhs_type, lhs_type);
-                } else {
-                    lhs_type
                 }
+                lhs_type
             },
             Expr::Identifier(name) => {
                 match self.get_var_type(&name) {
@@ -152,63 +200,59 @@ impl Analyzer {
                 let lhs_type = self.check_type(*lhs);
                 let rhs_type = self.check_type(*rhs);
                 if lhs_type != rhs_type {
-                    panic!("BinOp mismatch: cannot add {:?} and {:?}", lhs_type, rhs_type);
+                    panic!("BinOp mismatch");
                 } else if lhs_type != "String" && lhs_type != "Number" {
                     panic!("Can only add numbers or strings");
-                } else {
-                    lhs_type
                 }
+                lhs_type
             },
             Expr::BinOp(_, lhs, rhs) => {
                 let lhs_type = self.check_type(*lhs);
                 let rhs_type = self.check_type(*rhs);
                 if lhs_type != rhs_type {
-                    panic!("BinOp mismatch: cannot operate on {:?} and {:?}", lhs_type, rhs_type);
+                    panic!("BinOp mismatch");
                 } else if lhs_type != "Number" {
                     panic!("Can only perform arithmetic on numbers");
-                } else {
-                    lhs_type
                 }
+                lhs_type
             },
             Expr::BoolOp(op, lhs, rhs) => {
                 let lhs_type = self.check_type(*lhs);
                 let rhs_type = self.check_type(*rhs);
                 if lhs_type != rhs_type {
-                    panic!("BoolOp mismatch: {:?} and {:?}", lhs_type, rhs_type);
+                    panic!("BoolOp mismatch");
                 }
                 match op {
                     BoolOp::Greater | BoolOp::Less => {
                         if lhs_type != "Number" {
-                            panic!("Greater/Less operations require Numbers");
+                            panic!("Greater/Less require Numbers");
                         }
                     },
                     BoolOp::AndAnd | BoolOp::OrOr => {
                         if lhs_type != "Boolean" {
-                            panic!("And/Or operations require Booleans");
+                            panic!("And/Or require Booleans");
                         }
                     }
                 }
-                "Boolean".to_string() // Relational and logical ops always return Boolean
+                "Boolean".to_string() 
             },
             Expr::UnaryOp(_, expr) => {
                 let _type = self.check_type(*expr);
                 if _type != "Number" {
-                    panic!("Can only perform unary operations on numbers!");
+                    panic!("Can only perform unary operations on numbers");
                 }
                 _type
-            }
+            },
             Expr::StringLiteral(_) => "String".to_string(),
             Expr::NumberLiteral(_) => "Number".to_string(),
             Expr::BooleanLiteral(_) => "Boolean".to_string(),
             Expr::VariableDecl(_type, name) => {
-                self.declare_var(name,_type.clone());
+                self.declare_var(name, _type.clone());
                 _type
             },
-            _ => panic!("Unhandled expression in type checker: {:?}", expr)
         }
     }
 }
-
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
@@ -229,108 +273,185 @@ impl Parser {
         }
     }
 
-    fn parse_scope(&mut self) -> Result<Expr, String> {
-        let has_braces = matches!(self.current(), Token::OBrace);
-        if has_braces {
-            self.consume(); 
+    fn peek(&self) -> &Token {
+        if self.pos + 1 < self.tokens.len() {
+            &self.tokens[self.pos + 1]
+        } else {
+            &Token::EOF
         }
-        
-        let mut assigns: Vec<Expr> = Vec::new();
-        let mut scopes: Vec<Expr> = Vec::new();    
-
-        while !matches!(self.current(), Token::CBrace | Token::EOF) {
-            if matches!(self.current(), Token::OBrace) {
-                scopes.push(self.parse_scope()?);
-            } else {
-                assigns.push(self.parse_assign()?);
-                
-                if matches!(self.current(), Token::Semicolon) {
-                    self.consume();
-                } else {
-                    return Err(format!("Expected ';' inside scope, found {:?}", self.current()));
-                }
-            }
-        }
-
-        if has_braces {
-            if matches!(self.current(), Token::CBrace) {
-                self.consume(); 
-            } else {
-                return Err(String::from("Expected '}' to close scope, but reached EOF"));
-            }
-        }
-        
-        Ok(Expr::Scope(assigns, scopes))
     }
-   
-    fn parse_assign(&mut self) -> Result<Expr, String> {
-        let lhs = self.parse_var_dec()?; 
+
+    fn expect_semicolon(&mut self) -> Result<(), String> {
+        if matches!(self.current(), Token::Semicolon) {
+            self.consume();
+            Ok(())
+        } else {
+            Err(format!("Expected ';', found {:?}", self.current()))
+        }
+    }
+
+    fn parse_document(&mut self) -> Result<Expr, String> {
+        let mut statements = Vec::new();
+
+        while !matches!(self.current(), Token::EOF) {
+            let is_function = match (self.current(), self.peek()) {
+                (Token::Identifier(_), Token::Identifier(_)) => {
+                    if self.pos + 2 < self.tokens.len() && matches!(self.tokens[self.pos + 2], Token::OParen) {
+                        true
+                    } else {
+                        false
+                    }
+                },
+                _ => false,
+            };
+
+            if is_function {
+                statements.push(self.parse_fun_decl()?);
+            } else {
+                statements.push(self.parse_statement()?);
+            }
+        }
         
-        if matches!(self.current(), Token::Equals) {
+        Ok(Expr::Document(statements))
+    }
+
+    fn parse_statement(&mut self) -> Result<Expr, String> {
+        match self.current() {
+            Token::Return => {
+                let ret = self.parse_return()?;
+                self.expect_semicolon()?;
+                Ok(ret)
+            },
+            Token::OBrace => {
+                self.parse_scope()
+            },
+            _ => {
+                let expr = self.parse_assign()?;
+                self.expect_semicolon()?;
+                Ok(expr)
+            }
+        }
+    }
+
+    fn parse_fun_decl(&mut self) -> Result<Expr, String> {
+        let return_type = if let Token::Identifier(t) = self.current() {
+            t.clone()
+        } else {
+            return Err(format!("Expected return type, found {:?}", self.current()));
+        };
+        self.consume();
+
+        let func_name = if let Token::Identifier(n) = self.current() {
+            n.clone()
+        } else {
+            return Err(format!("Expected function name, found {:?}", self.current()));
+        };
+        self.consume();
+
+        if matches!(self.current(), Token::OParen) {
             self.consume();
         } else {
-            return Err(format!("Expected '=' sign, found {:?}", self.current()));
+            return Err(format!("Expected '(' after function name, found {:?}", self.current()));
         }
 
+        let mut params = Vec::new();
+        while !matches!(self.current(), Token::CParen | Token::EOF) {
+            let param_type = if let Token::Identifier(t) = self.current() { t.clone() } else { return Err("Expected type".into()); };
+            self.consume();
+            let param_name = if let Token::Identifier(n) = self.current() { n.clone() } else { return Err("Expected name".into()); };
+            self.consume();
+
+            params.push(Expr::VariableDecl(param_type, param_name));
+
+            if matches!(self.current(), Token::Comma) {
+                self.consume(); 
+            }
+        }
+
+        if matches!(self.current(), Token::CParen) {
+            self.consume(); 
+        }
+
+        let body = self.parse_scope()?;
+
+        Ok(Expr::FunDecl(return_type, func_name, params, Box::new(body)))
+    }
+
+    fn parse_return(&mut self) -> Result<Expr, String> {
+        if let Token::Return = self.current() {
+            self.consume();
+        } else {
+            return Err(format!("Expected return keyword, found {:?}", self.current()));
+        };
+
+        Ok(Expr::ReturnExpr(Box::new(self.parse_expr_unary()?)))
+    }
+
+    fn parse_scope(&mut self) -> Result<Expr, String> {
+        self.consume(); 
         
-        let rhs = self.parse_expr_unary()?; 
-        
-        Ok(Expr::AssignOp(Box::new(lhs), Box::new(rhs)))
+        let mut statements: Vec<Expr> = Vec::new();
+
+        while !matches!(self.current(), Token::CBrace | Token::EOF) {
+            statements.push(self.parse_statement()?);
+        }
+
+        if matches!(self.current(), Token::CBrace) {
+            self.consume(); 
+            Ok(Expr::Scope(statements))
+        } else {
+            Err(String::from("Expected '}' to close scope"))
+        }
+    }
+    
+    fn parse_assign(&mut self) -> Result<Expr, String> {
+        let is_declaration = match (self.current(), self.peek()) {
+            (Token::Identifier(_), Token::Identifier(_)) => true, 
+            (Token::Identifier(_), Token::OBracket) => true,      
+            _ => false,
+        };
+
+        let lhs = if is_declaration {
+            self.parse_var_dec()?
+        } else {
+            self.parse_expr_unary()? 
+        };
+
+        if matches!(self.current(), Token::Equals) {
+            self.consume();
+            let rhs = self.parse_expr_unary()?; 
+            Ok(Expr::AssignOp(Box::new(lhs), Box::new(rhs)))
+        } else {
+            Ok(lhs)
+        }
     }
 
     fn parse_var_dec(&mut self) -> Result<Expr, String> {
-        let mut lhs_tokens: Vec<Token> = Vec::new();
-        
-        while !matches!(self.current(), Token::Equals | Token::EOF | Token::Semicolon) {
-            lhs_tokens.push(self.current().clone());
+        let mut type_str = if let Token::Identifier(t) = self.current() {
+            t.clone()
+        } else {
+            return Err("Expected type identifier".into());
+        };
+        self.consume();
+
+        while matches!(self.current(), Token::OBracket) {
             self.consume();
-        }
-        
-        if lhs_tokens.len() == 1 {
-            if let Token::Identifier(name) = &lhs_tokens[0] {
-                return Ok(Expr::Identifier(name.clone()));
+            if matches!(self.current(), Token::CBracket) {
+                self.consume();
+                type_str.push_str("[]");
             } else {
-                return Err(format!("Expected identifier for reassignment, found {:?}", lhs_tokens[0]));
+                return Err("Expected ']' in array type declaration".into());
             }
-        } else if lhs_tokens.len() == 2 {
-            let (type_str, name_str) = match &lhs_tokens[..] {
-                [Token::Identifier(_type), Token::Identifier(name)]  => (_type, name),
-                _ => return Err(format!("Invalid tokens in variable dec! {:?}", lhs_tokens))
-            };
-            return Ok(Expr::VariableDecl(type_str.to_string(), name_str.to_string()));
-        } 
-        else{
-           if !matches!(lhs_tokens[0],Token::Identifier(_)) {
-                return Err(format!("First token in variable declaration must be identifier!"));
-           } 
-           let mut type_str : String = match &lhs_tokens[0] {
-                Token::Identifier(_type) => _type.clone(),
-                _                        => unreachable!()
-           };
-
-           let mut i = 1;
-           let mut needsClosing = false;
-           while matches!(lhs_tokens[i],Token::OBracket | Token::CBracket){
-                match lhs_tokens[i] {
-                    Token::OBracket if !needsClosing => { type_str.push('['); needsClosing = true},
-                    Token::CBracket if  needsClosing => { type_str.push(']'); needsClosing = false},
-                    Token::OBracket | Token::CBracket => {return Err(format!("Bracket mismatch in type declaration"));},
-                    _ => {unreachable!();}
-                }
-                i += 1;
-            }
-
-            if let Token::Identifier(name) = &lhs_tokens[lhs_tokens.len() - 1] {
-                return Ok(Expr::VariableDecl(type_str, name.clone())); 
-            }
-            else{
-                return Err(format!("No variable name"));
-            }
-
-            
         }
 
-        Err(format!("LHS must be 1 (reassignment) or 2 (declaration) tokens, found {}", lhs_tokens.len()))
+        let name_str = if let Token::Identifier(n) = self.current() {
+            n.clone()
+        } else {
+            return Err("Expected variable name".into());
+        };
+        self.consume();
+
+        Ok(Expr::VariableDecl(type_str, name_str))
     }
 
     fn parse_expr_unary(&mut self) -> Result<Expr, String> {
@@ -423,13 +544,9 @@ impl Parser {
         self.consume(); 
         
         let mut elements = Vec::new();
-
         
         while !matches!(self.current(), Token::CBracket | Token::EOF) {
-            
-            
             elements.push(self.parse_expr_unary()?);
-
             
             if matches!(self.current(), Token::Comma) {
                 self.consume(); 
@@ -438,7 +555,6 @@ impl Parser {
             }
         }
 
-        // Ensure it properly closed with ']'
         if matches!(self.current(), Token::CBracket) {
             self.consume(); 
             Ok(Expr::ArrayLiteral(elements))
@@ -465,7 +581,25 @@ impl Parser {
                 Ok(Expr::BooleanLiteral(val))
             },
             Token::Identifier(val) => {
-                self.consume();
+                self.consume(); 
+                if matches!(self.current(), Token::OParen) {
+                    self.consume(); 
+                    let mut args = Vec::new();
+                    while !matches!(self.current(), Token::CParen | Token::EOF) {
+                        args.push(Box::new(self.parse_expr_unary()?));
+                        if matches!(self.current(), Token::Comma) {
+                            self.consume(); 
+                        } else if !matches!(self.current(), Token::CParen) {
+                            return Err(format!("Expected ',' or ')', found {:?}", self.current()));
+                        }
+                    }
+                    if matches!(self.current(), Token::CParen) {
+                        self.consume(); 
+                        return Ok(Expr::FunCall(Box::new(Expr::Identifier(val)), args));
+                    } else {
+                        return Err(String::from("Expected ')' to close function call"));
+                    }
+                }
                 Ok(Expr::Identifier(val))
             },
             Token::OParen => {
@@ -524,6 +658,7 @@ impl Tokenizer {
             let token = match self.accumulator.as_str() {
                 "false"    => Token::BooleanLiteral(false),
                 "true"     => Token::BooleanLiteral(true),
+                "return"   => Token::Return,
                 _          => Token::Identifier(self.accumulator.clone())        
             };
             self.accumulator.clear();
@@ -544,9 +679,8 @@ impl Tokenizer {
             
         } else {
             let token = match c {
-                // String literal handling
                 '"' => {
-                    self.consume(1); // Consume opening quote
+                    self.consume(1); 
                     while let Some(ch) = self.current() {
                         if ch != '"' {
                             self.accumulator.push(ch);
@@ -589,24 +723,16 @@ impl Tokenizer {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let types : Vec<&str>  = vec!["Number","Boolean","String"];
-    
-    let message: String = fs::read_to_string("example.txt")?;
-    
+    let message: String = fs::read_to_string("example.txt").unwrap_or_else(|_| String::from("Number main() { return 0; }"));
     
     let mut tokenizer = Tokenizer::new(message);
     let tokens: Vec<Token> = std::iter::from_fn(|| tokenizer.next_token()).collect();
     
-    println!("{:?}",tokens);
-
     let mut parser = Parser::new(tokens);
-    let root = parser.parse_scope()?;
-
-    println!("{:?}", root);
+    let root = parser.parse_document()?;
 
     let mut analyzer = Analyzer::new();
     analyzer.check_type(root);
     
-
     Ok(())
 }

@@ -1,1 +1,5 @@
-number[][] x =  [];
+number add(number x,number y){
+    return x + y;
+}
+
+number z = add("hey",4);
