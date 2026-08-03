@@ -21,6 +21,7 @@ enum Token {
     OBracket,
     CBracket,
     Equals,
+    Comma,
     Add,
     Multiply,
     Sub,
@@ -66,6 +67,7 @@ enum Expr {
     BoolOp(BoolOp, Box<Expr>, Box<Expr>),
     UnaryOp(UnaryOp, Box<Expr>),
     FunCall(Box<Expr>, Vec<Box<Expr>>),
+    ArrayLiteral(Vec<Expr>),
     NumberLiteral(i32),
     Identifier(String),
     StringLiteral(String),
@@ -113,13 +115,28 @@ impl Analyzer {
                 self.exit_scope();
                 String::from("")
             },
+            Expr::ArrayLiteral(elements) => {
+                if elements.is_empty() {
+                    return "EmptyArray".to_string();
+                }
+                let mut iter = elements.into_iter();
+                
+                let first_type = self.check_type(iter.next().expect("Empty arrays not supported"));
+
+                if !iter.all(|el| self.check_type(el) == first_type) {
+                    panic!("Array element type mismatch: all elements must be {}", first_type);
+                }
+                
+                format!("{}[]", first_type).to_lowercase()
+            },
             Expr::AssignOp(lhs, rhs) => {
                 let rhs_type = self.check_type(*rhs);
-                
                 let lhs_type = self.check_type(*lhs);
 
+                let is_valid = lhs_type == rhs_type || 
+                            (rhs_type == "EmptyArray" && lhs_type.ends_with("[]"));
 
-                if lhs_type != rhs_type {
+                if !is_valid {
                     panic!("Assign mismatch: Tried assigning {:?} to {:?}", rhs_type, lhs_type);
                 } else {
                     lhs_type
@@ -254,6 +271,7 @@ impl Parser {
         } else {
             return Err(format!("Expected '=' sign, found {:?}", self.current()));
         }
+
         
         let rhs = self.parse_expr_unary()?; 
         
@@ -401,8 +419,39 @@ impl Parser {
         Ok(left)
     }
 
+    fn parse_array_literal(&mut self) -> Result<Expr, String> {
+        self.consume(); 
+        
+        let mut elements = Vec::new();
+
+        
+        while !matches!(self.current(), Token::CBracket | Token::EOF) {
+            
+            
+            elements.push(self.parse_expr_unary()?);
+
+            
+            if matches!(self.current(), Token::Comma) {
+                self.consume(); 
+            } else if !matches!(self.current(), Token::CBracket) {
+                return Err(format!("Expected ',' or ']', found {:?}", self.current()));
+            }
+        }
+
+        // Ensure it properly closed with ']'
+        if matches!(self.current(), Token::CBracket) {
+            self.consume(); 
+            Ok(Expr::ArrayLiteral(elements))
+        } else {
+            Err(String::from("Expected ']' to close array literal"))
+        }
+    }
+
     fn literal(&mut self) -> Result<Expr, String> {
         match self.current().clone() {
+            Token::OBracket =>  {
+                self.parse_array_literal()
+            },
             Token::NumberLiteral(val) => {
                 self.consume();
                 Ok(Expr::NumberLiteral(val))
@@ -516,6 +565,7 @@ impl Tokenizer {
                 '&' if self.peek() == Some('&') => Token::AndAnd,
                 '|' if self.peek() == Some('|') => Token::OrOr,
                 ';' => Token::Semicolon,
+                ',' => Token::Comma,
                 '(' => Token::OParen,
                 ')' => Token::CParen,
                 '{' => Token::OBrace,
