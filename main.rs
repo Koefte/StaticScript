@@ -11,6 +11,7 @@ enum Token {
     StringLiteral(String),
     BooleanLiteral(bool),
     AndAnd,
+    Arrow,
     OrOr,
     Semicolon,
     OParen,
@@ -72,6 +73,7 @@ enum Expr {
     ReturnExpr(Box<Expr>),
     FunCall(Box<Expr>, Vec<Box<Expr>>),
     ArrayLiteral(Vec<Expr>),
+    LambdaFun(Vec<Expr>,Box<Expr>),
     NumberLiteral(i32),
     Identifier(String),
     StringLiteral(String),
@@ -195,7 +197,19 @@ impl Analyzer {
                         }
                         
                         return ret_type;
-                    } else {
+                    }
+                    else if let Some(callee_type) = self.get_var_type(&name) {
+                        if !callee_type.starts_with("fn(") {
+                            panic!("Variable '{}' is not a function", name);
+                        }
+                        
+                        let arrow_idx = callee_type.find(")->").unwrap();
+                        let params_str = &callee_type[3..arrow_idx];
+                        let ret_type = &callee_type[arrow_idx + 3..];
+                        
+                        return ret_type.to_string();
+                    }
+                    else {
                         panic!("Call to undefined function: {}", name);
                     }
                 }
@@ -316,6 +330,23 @@ impl Analyzer {
                 }
                 _type
             },
+            Expr::LambdaFun(params, body) => {
+                self.enter_scope();
+                let mut param_types = Vec::new();
+                
+                for param in params {
+                    if let Expr::VariableDecl(p_type, p_name) = param {
+                        self.declare_var(p_name, p_type.clone());
+                        param_types.push(p_type);
+                    }
+                }
+                
+                let ret_type = self.check_type(*body);
+                
+                self.exit_scope();
+                
+                format!("fn({})->{}", param_types.join(","), ret_type)
+            },
             Expr::StringLiteral(_) => "string".to_string(),
             Expr::NumberLiteral(_) => "number".to_string(),
             Expr::BooleanLiteral(_) => "boolean".to_string(),
@@ -323,6 +354,7 @@ impl Analyzer {
                 self.declare_var(name, _type.clone());
                 _type
             },
+            _ => unreachable!()
         }
     }
 }
@@ -352,6 +384,31 @@ impl Parser {
         } else {
             &Token::EOF
         }
+    }
+
+    fn is_lambda_start(&self) -> bool {
+        if !matches!(self.current(), Token::OParen) {
+            return false;
+        }
+
+        let mut i = self.pos + 1;
+        let mut paren_count = 1;
+
+        while i < self.tokens.len() {
+            match self.tokens[i] {
+                Token::OParen => paren_count += 1,
+                Token::CParen => {
+                    paren_count -= 1;
+                    if paren_count == 0 {
+                        return i + 1 < self.tokens.len() && matches!(self.tokens[i + 1], Token::Arrow);
+                    }
+                }
+                Token::EOF => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     fn expect_semicolon(&mut self) -> Result<(), String> {
@@ -487,15 +544,58 @@ impl Parser {
         let lhs = if is_declaration {
             self.parse_var_dec()?
         } else {
-            self.parse_expr_unary()? 
+            self.parse_expr_lambda()? 
         };
 
         if matches!(self.current(), Token::Equals) {
             self.consume();
-            let rhs = self.parse_expr_unary()?; 
+            let rhs = self.parse_expr_lambda()?; 
             Ok(Expr::AssignOp(Box::new(lhs), Box::new(rhs)))
         } else {
             Ok(lhs)
+        }
+    }
+
+    fn parse_expr_lambda(&mut self) -> Result<Expr, String> {
+        if self.is_lambda_start() {
+            self.consume(); 
+
+            let mut params = Vec::new();
+            
+            while !matches!(self.current(), Token::CParen | Token::EOF) {
+                let param_type = if let Token::Identifier(t) = self.current() { t.clone() } else { return Err("Expected parameter type".into()); };
+                self.consume();
+                
+                let param_name = if let Token::Identifier(n) = self.current() { n.clone() } else { return Err("Expected parameter name".into()); };
+                self.consume();
+                
+                params.push(Expr::VariableDecl(param_type, param_name));
+                
+                if matches!(self.current(), Token::Comma) {
+                    self.consume(); 
+                } else if !matches!(self.current(), Token::CParen) {
+                    return Err(format!("Expected ',' or ')', found {:?}", self.current()));
+                }
+            }
+            
+            self.consume(); 
+            
+            if matches!(self.current(), Token::Arrow) {
+                self.consume(); 
+            } else {
+                return Err("Expected '=>' after lambda parameters".into());
+            }
+            
+            let body = if matches!(self.current(), Token::OBrace) {
+                self.parse_scope()?
+            } else {
+                self.parse_expr_lambda()? 
+            };
+            
+            Ok(Expr::LambdaFun(params, Box::new(body)))
+            
+        } else {
+            self.parse_expr_unary()
         }
     }
 
@@ -793,6 +893,7 @@ impl Tokenizer {
                 ')' => Token::CParen,
                 '{' => Token::OBrace,
                 '}' => Token::CBrace,
+                '=' if self.peek() == Some('>') => Token::Arrow,
                 '=' => Token::Equals,
                 '*' => Token::Multiply,
                 '/' => Token::Divide,
@@ -805,7 +906,7 @@ impl Tokenizer {
                 _   => Token::Unknown(c.to_string()) 
             };
             
-            self.consume(if matches!(token, Token::AndAnd | Token::OrOr) { 2 } else if let Token::StringLiteral(_) = token { 0 } else { 1 }); 
+            self.consume(if matches!(token, Token::AndAnd | Token::OrOr | Token::Arrow) { 2 } else if let Token::StringLiteral(_) = token { 0 } else { 1 }); 
             return Some(token);
         }
     }

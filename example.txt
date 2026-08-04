@@ -1,2 +1,2 @@
-auto x = 4;
-string y = x;
+auto f = (number x) => x*2;
+string x = f(2);
