@@ -214,16 +214,54 @@ impl Analyzer {
                 format!("{}[]", first_type)
             },
             Expr::AssignOp(lhs, rhs) => {
-                let rhs_type = self.check_type(*rhs);
-                let lhs_type = self.check_type(*lhs);
+                match *lhs{
+                    
+                    Expr::VariableDecl(ref _type,ref name) => {
+                        match _type.as_str() {
+                            "auto" => {
+                                let rhs_type = self.check_type(*rhs);
 
-                let is_valid = lhs_type == rhs_type || 
-                            (rhs_type == "EmptyArray" && lhs_type.ends_with("[]"));
+                                self.declare_var(name.clone(),rhs_type.clone());
 
-                if !is_valid {
-                    panic!("Assign mismatch: Tried assigning {:?} to {:?}", rhs_type, lhs_type);
+                                rhs_type  
+                            }
+
+                            _ => {
+                                let rhs_type = self.check_type(*rhs);
+                                let lhs_type = self.check_type(*lhs);
+
+                                let is_valid = lhs_type == rhs_type || 
+                                            (rhs_type == "EmptyArray" && lhs_type.ends_with("[]"));
+
+                                let is_auto = lhs_type == "auto";
+
+                                if !is_valid  && !is_auto{
+                                    panic!("Assign mismatch: Tried assigning {:?} to {:?}", rhs_type, lhs_type);
+                                }
+
+                                rhs_type
+                            }
+                        }
+                    }
+
+                    _ =>  {
+                        let rhs_type = self.check_type(*rhs);
+                        let lhs_type = self.check_type(*lhs);
+
+                        let is_valid = lhs_type == rhs_type || 
+                                    (rhs_type == "EmptyArray" && lhs_type.ends_with("[]"));
+
+                        let is_auto = lhs_type == "auto";
+
+                        if !is_valid  && !is_auto{
+                            panic!("Assign mismatch: Tried assigning {:?} to {:?}", rhs_type, lhs_type);
+                        }
+
+                        rhs_type 
+                    }
                 }
-                lhs_type
+                
+               
             },
             Expr::Identifier(name) => {
                 match self.get_var_type(&name) {
@@ -638,7 +676,7 @@ impl Parser {
                     }
                 }
 
-                else if matches!(self.current(),Token::OBracket) {
+                while matches!(self.current(),Token::OBracket) {
                     self.consume();
 
                     let index_expr = self.parse_expr_unary()?;
@@ -646,6 +684,8 @@ impl Parser {
                     if matches!(self.current(),Token::CBracket) {
                         self.consume();
                         base_expr = Expr::ArrayAccess(Box::new(base_expr),Box::new(index_expr));
+                    } else {
+                        return Err(String::from("Expected ']' after array index"));
                     }
                 }
 
@@ -779,6 +819,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     let mut parser = Parser::new(tokens);
     let root = parser.parse_document()?;
+    println!("{:?}",root);
 
     let mut analyzer = Analyzer::new();
     analyzer.check_type(root);
