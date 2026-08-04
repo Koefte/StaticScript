@@ -44,6 +44,7 @@ struct Parser {
 struct Analyzer {
     variables: Variables,
     functions: HashMap<String, (String, Vec<String>)>,
+    return_stack: Vec<String>,
 }
 
 type Variables = Vec<HashMap<String, String>>;
@@ -66,6 +67,7 @@ enum Expr {
     AssignOp(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     BoolOp(BoolOp, Box<Expr>, Box<Expr>),
+    ArrayAccess(Box<Expr>,Box<Expr>),
     UnaryOp(UnaryOp, Box<Expr>),
     ReturnExpr(Box<Expr>),
     FunCall(Box<Expr>, Vec<Box<Expr>>),
@@ -80,7 +82,8 @@ impl Analyzer {
     fn new() -> Self {
         Analyzer { 
             functions: HashMap::new(), 
-            variables: vec![HashMap::new()]
+            variables: vec![HashMap::new()],
+            return_stack: Vec::new()
         }
     }
 
@@ -136,12 +139,44 @@ impl Analyzer {
                 
                 self.functions.insert(name, (ret_type.clone(), param_types));
                 
+                self.return_stack.push(ret_type.clone());
+
                 self.check_type(*body);
+                
+                self.return_stack.pop();
+
                 self.exit_scope();
                 ret_type
             },
-            Expr::ReturnExpr(expr) => {
-                self.check_type(*expr)
+            Expr::ArrayAccess(base,index) => {
+                let index_type = self.check_type(*index);
+                if  index_type != "number"  {
+                    panic!("Can only index array with numbers , found {}",index_type);
+                }
+
+                let array_type = self.check_type(*base);
+
+                if array_type.ends_with("[]") {
+                    array_type[..array_type.len() - 2].to_string()
+                }
+                else{
+                    panic!("Cannot index into non-array type {}",array_type);
+                }
+            }
+            Expr::ReturnExpr(expr) => { 
+                let actual_type = self.check_type(*expr);
+
+                if let Some(expected_type) = self.return_stack.last(){
+                    if &actual_type != expected_type  {
+                        panic!("Return type mismatch: expected '{}', found '{}'", 
+                                expected_type, actual_type
+                        );
+                    }
+                } else {
+                    panic!("Cannot use 'return' outside of a function");
+                }
+                
+                actual_type
             },
             Expr::FunCall(name_expr, args) => {
                 if let Expr::Identifier(name) = *name_expr {
@@ -581,7 +616,9 @@ impl Parser {
                 Ok(Expr::BooleanLiteral(val))
             },
             Token::Identifier(val) => {
-                self.consume(); 
+                self.consume();
+                let mut base_expr = Expr::Identifier(val.clone());
+
                 if matches!(self.current(), Token::OParen) {
                     self.consume(); 
                     let mut args = Vec::new();
@@ -595,12 +632,24 @@ impl Parser {
                     }
                     if matches!(self.current(), Token::CParen) {
                         self.consume(); 
-                        return Ok(Expr::FunCall(Box::new(Expr::Identifier(val)), args));
+                        base_expr = Expr::FunCall(Box::new(Expr::Identifier(val)), args);
                     } else {
                         return Err(String::from("Expected ')' to close function call"));
                     }
                 }
-                Ok(Expr::Identifier(val))
+
+                else if matches!(self.current(),Token::OBracket) {
+                    self.consume();
+
+                    let index_expr = self.parse_expr_unary()?;
+
+                    if matches!(self.current(),Token::CBracket) {
+                        self.consume();
+                        base_expr = Expr::ArrayAccess(Box::new(base_expr),Box::new(index_expr));
+                    }
+                }
+
+                Ok(base_expr)
             },
             Token::OParen => {
                 self.consume(); 

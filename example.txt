@@ -1,5 +1,2 @@
-number add(number x,number y){
-    return x + y;
-}
-
-string z = add(3,4);
+number[] xs = [0,1,2];
+string x = xs[0];
