@@ -201,8 +201,8 @@ impl Analyzer {
                 let rhs_type = self.check_type(*rhs);
                 if lhs_type != rhs_type {
                     panic!("BinOp mismatch");
-                } else if lhs_type != "String" && lhs_type != "Number" {
-                    panic!("Can only add numbers or strings");
+                } else if lhs_type != "string" && lhs_type != "number" {
+                    panic!("Can only add numbers or strings,tried adding {:?} and {:?}",lhs_type,rhs_type);
                 }
                 lhs_type
             },
@@ -211,7 +211,7 @@ impl Analyzer {
                 let rhs_type = self.check_type(*rhs);
                 if lhs_type != rhs_type {
                     panic!("BinOp mismatch");
-                } else if lhs_type != "Number" {
+                } else if lhs_type != "number" {
                     panic!("Can only perform arithmetic on numbers");
                 }
                 lhs_type
@@ -224,28 +224,28 @@ impl Analyzer {
                 }
                 match op {
                     BoolOp::Greater | BoolOp::Less => {
-                        if lhs_type != "Number" {
+                        if lhs_type != "number" {
                             panic!("Greater/Less require Numbers");
                         }
                     },
                     BoolOp::AndAnd | BoolOp::OrOr => {
-                        if lhs_type != "Boolean" {
+                        if lhs_type != "boolean" {
                             panic!("And/Or require Booleans");
                         }
                     }
                 }
-                "Boolean".to_string() 
+                "boolean".to_string() 
             },
             Expr::UnaryOp(_, expr) => {
                 let _type = self.check_type(*expr);
-                if _type != "Number" {
+                if _type != "number" {
                     panic!("Can only perform unary operations on numbers");
                 }
                 _type
             },
-            Expr::StringLiteral(_) => "String".to_string(),
-            Expr::NumberLiteral(_) => "Number".to_string(),
-            Expr::BooleanLiteral(_) => "Boolean".to_string(),
+            Expr::StringLiteral(_) => "string".to_string(),
+            Expr::NumberLiteral(_) => "number".to_string(),
+            Expr::BooleanLiteral(_) => "boolean".to_string(),
             Expr::VariableDecl(_type, name) => {
                 self.declare_var(name, _type.clone());
                 _type

@@ -2,4 +2,4 @@ number add(number x,number y){
     return x + y;
 }
 
-number z = add("hey",4);
+string z = add(3,4);
