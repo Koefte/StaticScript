@@ -1,2 +1,1 @@
-auto f = (number x) => x*2;
-string x = f(2);
+boolean x = !5;

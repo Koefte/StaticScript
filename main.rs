@@ -14,6 +14,7 @@ enum Token {
     Arrow,
     OrOr,
     Semicolon,
+    Exclamation,
     OParen,
     CParen,
     OBrace,
@@ -54,7 +55,7 @@ type Variables = Vec<HashMap<String, String>>;
 enum BinOp { Add, Sub, Mul, Div }
 
 #[derive(Debug, Clone)]
-enum UnaryOp { Add, Sub }
+enum UnaryOp { Add, Sub ,Not}
 
 #[derive(Debug, Clone)]
 enum BoolOp { OrOr, AndAnd, Greater, Less }
@@ -323,11 +324,21 @@ impl Analyzer {
                 }
                 "boolean".to_string() 
             },
-            Expr::UnaryOp(_, expr) => {
+            Expr::UnaryOp(op, expr) => {
                 let _type = self.check_type(*expr);
-                if _type != "number" {
-                    panic!("Can only perform unary operations on numbers");
+                match op {
+                    UnaryOp::Not => {
+                        if _type != "boolean" {
+                            panic!("Can only perform logical negation on boolean values");
+                        }
+                    }
+                    _ => {
+                        if _type != "number" {
+                            panic!("Can only perform unary operations on numbers");
+                        }
+                    }
                 }
+                
                 _type
             },
             Expr::LambdaFun(params, body) => {
@@ -628,10 +639,11 @@ impl Parser {
     }
 
     fn parse_expr_unary(&mut self) -> Result<Expr, String> {
-        let op = if matches!(self.current(), Token::Sub | Token::Add) {
+        let op = if matches!(self.current(), Token::Sub | Token::Add | Token::Exclamation) {
             let temp = match self.current() {
                 Token::Sub => UnaryOp::Sub,
                 Token::Add => UnaryOp::Add,
+                Token::Exclamation => UnaryOp::Not,
                 _ => unreachable!()
             };
             self.consume();
@@ -903,6 +915,7 @@ impl Tokenizer {
                 '<' => Token::Less,
                 '[' => Token::OBracket,
                 ']' => Token::CBracket,
+                '!' => Token::Exclamation,
                 _   => Token::Unknown(c.to_string()) 
             };
             
