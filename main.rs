@@ -10,10 +10,13 @@ enum Token {
     Identifier(String),
     StringLiteral(String),
     BooleanLiteral(bool),
+    Struct,
+    Dot,
     AndAnd,
     Arrow,
     OrOr,
     Semicolon,
+    Colon,
     Exclamation,
     OParen,
     CParen,
@@ -40,6 +43,7 @@ struct Tokenizer {
 
 struct Parser {
     tokens: Vec<Token>,
+    types: Vec<Struct>,
     pos: usize
 }
 
@@ -47,9 +51,13 @@ struct Analyzer {
     variables: Variables,
     functions: HashMap<String, (String, Vec<String>)>,
     return_stack: Vec<String>,
+    types: Vec<Struct>,
+    primitive_types: Vec<String>
 }
 
 type Variables = Vec<HashMap<String, String>>;
+
+type Struct = (String,HashMap<String,String>);
 
 #[derive(Debug, Clone)]
 enum BinOp { Add, Sub, Mul, Div }
@@ -75,18 +83,36 @@ enum Expr {
     FunCall(Box<Expr>, Vec<Box<Expr>>),
     ArrayLiteral(Vec<Expr>),
     LambdaFun(Vec<Expr>,Box<Expr>),
+    Placeholder,
+    StructLiteral(HashMap<String,Expr>),
     NumberLiteral(i32),
     Identifier(String),
     StringLiteral(String),
     BooleanLiteral(bool)
 }
 
+struct Interpreter {
+    root: Expr
+}
+
+impl Interpreter {
+    fn new(root:Expr) -> Self {
+        Interpreter {
+            root:root
+        }
+    }
+
+    // TODO : implement a small interpreter!
+}
+
 impl Analyzer {
-    fn new() -> Self {
+    fn new(types:Vec<Struct>) -> Self {
         Analyzer { 
             functions: HashMap::new(), 
             variables: vec![HashMap::new()],
-            return_stack: Vec::new()
+            return_stack: Vec::new(),
+            types:types,
+            primitive_types: vec!["number".to_string(),"boolean".to_string(),"string".to_string()]
         }
     }
 
@@ -341,6 +367,15 @@ impl Analyzer {
                 
                 _type
             },
+            Expr::StructLiteral(struct_map) => {
+                let mut type_string  = String::new();
+                for (name,expr) in struct_map.into_iter() {
+                    type_string.push_str(&format!("{}:{}",name,self.check_type(expr)).to_string());
+                }
+                todo!("Look up corresponding struct name!");
+                type_string
+                               
+            }
             Expr::LambdaFun(params, body) => {
                 self.enter_scope();
                 let mut param_types = Vec::new();
@@ -365,6 +400,7 @@ impl Analyzer {
                 self.declare_var(name, _type.clone());
                 _type
             },
+            Expr::Placeholder => "Placeholder".to_string(),
             _ => unreachable!()
         }
     }
@@ -372,7 +408,7 @@ impl Analyzer {
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser { tokens, pos: 0 , types: Vec::new() }
     }
 
     fn current(&self) -> &Token {
@@ -463,6 +499,13 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(ret)
             },
+            Token::Struct => {
+                if let Some(err) = self.parse_struct() {
+                    return Err(err);
+                }
+                self.expect_semicolon()?;
+                Ok(Expr::Placeholder)
+            }
             Token::OBrace => {
                 self.parse_scope()
             },
@@ -472,6 +515,52 @@ impl Parser {
                 Ok(expr)
             }
         }
+    }
+
+    fn parse_struct(&mut self) -> Option<String> {
+        self.consume(); // Consume struct keyword
+        let struct_name = match self.current() {
+            Token::Identifier(name) => name.clone(),
+            _ => return Some(format!("Expected struct name after struct keyword, found {:?} ",self.current()))
+        };
+
+        self.consume();// Consume struct name
+
+        match self.current() {
+            Token::OBrace => self.consume(),
+            _ => return Some(format!("Expected open brace after struct name , found {:?}",self.current()))
+        }
+
+        let mut params = HashMap::new();
+            
+        while !matches!(self.current(), Token::CBrace | Token::EOF) {
+            let param_type = if let Token::Identifier(t) = self.current() { t.clone() } else { return Some("Expected parameter type".into()); };
+            self.consume();
+            
+            let param_name = if let Token::Identifier(n) = self.current() { n.clone() } else { return Some("Expected parameter name".into()); };
+            self.consume();
+            
+            params.insert(param_name,param_type);
+            
+            if matches!(self.current(), Token::Comma) {
+                self.consume(); 
+            } else if !matches!(self.current(), Token::CBrace) {
+                return Some(format!("Expected ',' or cbrace, found {:?}", self.current()));
+            }
+        }
+
+        match self.current() {
+            Token::CBrace => self.consume(),
+            _ => return Some(format!("Expected close brace , found {:?}",self.current()))
+        }
+        
+
+
+        self.types.push((struct_name,params));
+        None
+
+
+
     }
 
     fn parse_fun_decl(&mut self) -> Result<Expr, String> {
@@ -748,6 +837,38 @@ impl Parser {
         }
     }
 
+    fn parse_struct_literal(&mut self) -> Result<Expr,String> {
+        let mut params = HashMap::new();
+        while !matches!(self.current(), Token::CBrace | Token::EOF) {
+            let param_name = if let Token::Identifier(t) = self.current() { t.clone() } else { return Err("Expected parameter type".into()); };
+            self.consume();
+            
+            if !matches!(self.current(),Token::Colon) {
+                return Err(format!("Expected : found {:?}",self.current()));
+            }
+            self.consume();
+
+            let param_value = self.parse_expr_unary();
+
+            params.insert(param_name,param_value?);
+            
+            if matches!(self.current(), Token::Comma) {
+                self.consume(); 
+            } else if !matches!(self.current(), Token::CBrace) {
+                return Err(format!("Expected ',' or cbrace, found {:?}", self.current()));
+            }
+        }
+        
+
+        if !matches!(self.current(),Token::CBrace) {
+            return Err(format!("Expected cbrace found {:?}",self.current()))
+        }
+
+        self.consume();
+
+        return Ok(Expr::StructLiteral(params));
+    }
+
     fn literal(&mut self) -> Result<Expr, String> {
         match self.current().clone() {
             Token::OBracket =>  {
@@ -813,6 +934,11 @@ impl Parser {
                     Err(format!("Expected closing ')', but found {:?}", self.current()))
                 }
             },
+            Token::OBrace => {
+                self.consume();
+                let expr = self.parse_struct_literal()?;
+                Ok(expr)
+            }
             _ => Err(format!("Unexpected Token in literal: {:?}", self.current()))
         }
     }
@@ -848,7 +974,7 @@ impl Tokenizer {
 
         if c.is_alphabetic() {
             while let Some(ch) = self.current() {
-                if ch.is_alphabetic() || ch.is_numeric() {
+                if ch.is_alphabetic() || ch.is_numeric() || ch == '_' {
                     self.accumulator.push(ch);
                     self.consume(1);
                 } else {
@@ -860,6 +986,7 @@ impl Tokenizer {
                 "false"    => Token::BooleanLiteral(false),
                 "true"     => Token::BooleanLiteral(true),
                 "return"   => Token::Return,
+                "struct"   => Token::Struct,
                 _          => Token::Identifier(self.accumulator.clone())        
             };
             self.accumulator.clear();
@@ -900,7 +1027,9 @@ impl Tokenizer {
                 '&' if self.peek() == Some('&') => Token::AndAnd,
                 '|' if self.peek() == Some('|') => Token::OrOr,
                 ';' => Token::Semicolon,
+                ':' => Token::Colon,
                 ',' => Token::Comma,
+                '.' => Token::Dot,
                 '(' => Token::OParen,
                 ')' => Token::CParen,
                 '{' => Token::OBrace,
@@ -926,7 +1055,7 @@ impl Tokenizer {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let message: String = fs::read_to_string("example.txt").unwrap_or_else(|_| String::from("Number main() { return 0; }"));
+    let message: String = fs::read_to_string("example.txt")?;
     
     let mut tokenizer = Tokenizer::new(message);
     let tokens: Vec<Token> = std::iter::from_fn(|| tokenizer.next_token()).collect();
@@ -935,7 +1064,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let root = parser.parse_document()?;
     println!("{:?}",root);
 
-    let mut analyzer = Analyzer::new();
+    let mut analyzer = Analyzer::new(parser.types);
     analyzer.check_type(root);
     
     Ok(())
